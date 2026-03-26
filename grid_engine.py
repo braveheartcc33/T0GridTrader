@@ -234,7 +234,7 @@ class GridEngine:
 
         if price_diff > 0:
             # 价格上涨 → 向上穿越格子边界 → 卖出
-            net_short = self.cumulative_sells - self.cumulative_buys
+            net_short = self.cumulative_sells  # 买的不算！可卖出只看累计净卖出
             available_to_sell = self.base_position - net_short
             levels_crossed = int(round(price_diff / self.last_grid_spacing))
             can_sell = min(levels_crossed * self.shares_per_grid, max(0, available_to_sell))

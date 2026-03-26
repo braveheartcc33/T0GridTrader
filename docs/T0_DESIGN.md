@@ -73,8 +73,10 @@ A 股 T+0 约束的是**当日净卖出量**：
 
 ### 3.2 关键公式
 
+> 注意：A股T+0当天买的不能卖，所以买入不增加可卖出额度！
+
 ```
-net_short = cumulative_sells - cumulative_buys
+net_short = cumulative_sells  # 只算卖出！累计净卖出
 available_to_sell = base_position - net_short
 ```
 
@@ -84,8 +86,10 @@ available_to_sell = base_position - net_short
 |------|-------|-------|-----------|-----------|
 | 开盘 | 0 | 0 | 0 | 10,000 |
 | 卖 3,000 股 | 3,000 | 0 | 3,000 | 7,000 |
-| 买 2,000 股 | 3,000 | 2,000 | 1,000 | 9,000 |
-| 卖 5,000 股 | 8,000 | 2,000 | 6,000 | 4,000 |
+| 买 2,000 股 | 3,000 | 2,000 | 3,000 | 7,000 |
+| 卖 5,000 股 | 8,000 | 2,000 | 8,000 | 2,000 |
+
+> 买 2,000 股后，虽然"net_short"理论上减少到1,000，但买入的2,000股当日不能卖，所以可卖出额度**不增加**，仍为7,000。
 
 ---
 
@@ -99,7 +103,7 @@ available_to_sell = base_position - net_short
 4. 如果 `price_diff < 0` → **向下穿越格子边界 → 买入**
 
 ### 卖出逻辑
-- 计算 `net_short = cumulative_sells - cumulative_buys`
+- 计算 `net_short = cumulative_sells  # 买的不算`
 - `available_to_sell = base_position - net_short`
 - `can_sell = min(穿越格子数 × 每格股数, available_to_sell)`
 
