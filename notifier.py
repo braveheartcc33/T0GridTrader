@@ -12,7 +12,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import FEISHU_WEBHOOK_URL, FEISHU_SIGNING_KEY
+from config import FEISHU_WEBHOOK_URL, FEISHU_SIGNING_KEY, STOCK_CODE, STOCK_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ class GridNotifier:
         message = (
             f"{emoji} **{title}**\n"
             f"时间: {datetime.now().strftime('%H:%M:%S')}\n"
-            f"股票: 000825.SZ 太钢不锈\n"
+            f"股票: {STOCK_CODE} {STOCK_NAME}\n"
             f"触发价格: {price:.3f}\n"
             f"网格档位: 第 {grid_level} 档（共10档）\n"
             f"交易方向: {action}\n"
@@ -131,7 +131,7 @@ class GridNotifier:
         message = (
             f"📊 **网格交易状态汇报**\n"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"股票: 000825.SZ 太钢不锈\n"
+            f"股票: {STOCK_CODE} {STOCK_NAME}\n"
             f"当前价格: {current_price:.3f}\n"
             f"持仓状态: {position_type}（{position}股 / 底仓{base_position}股）\n"
             f"今日盈亏: {'+' if today_pnl >= 0 else ''}{today_pnl:.2f} 元\n"
@@ -171,7 +171,7 @@ class GridNotifier:
         message = (
             f"🚀 **网格交易系统启动**\n"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"股票: 000825.SZ 太钢不锈\n"
+            f"股票: {STOCK_CODE} {STOCK_NAME}\n"
             f"基准价: {base_price:.3f}\n"
             f"网格数量: {grid_count} 档\n"
             f"每格间距(ATR): {spacing:.4f}\n"

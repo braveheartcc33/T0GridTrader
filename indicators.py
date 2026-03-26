@@ -4,6 +4,10 @@ indicators.py - 技术指标计算（ATR、布林带）
 import pandas as pd
 import numpy as np
 import logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+from config import STOCK_CODE, STOCK_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +91,7 @@ def verify_atr_calculation():
 
     token = os.getenv("TUSHARE_TOKEN") or "d11513bc2e258334d01ddf0db02d45793325443dc1260931691d1552"
     pro = ts.pro_api(token)
-    df = pro.daily(ts_code='000825.SZ', start_date='20251201', end_date='20260324')
+    df = pro.daily(ts_code=STOCK_CODE, start_date='20251201', end_date='20260324')
     df = df.sort_values('trade_date').reset_index(drop=True)
 
     period = 14
@@ -128,7 +132,7 @@ def verify_atr_calculation():
 
     # 比较
     print("=" * 70)
-    print("ATR 计算验证（太钢不锈 000825.SZ）")
+    print(f"ATR 计算验证（{STOCK_NAME} {STOCK_CODE}）")
     print("=" * 70)
     print(f"{'日期':<12} {'TR':>8} {'pandas向量ATR':>14} {'手动WilderATR':>14} {'差异':>10}")
     print("-" * 70)
