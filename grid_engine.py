@@ -117,7 +117,17 @@ class GridEngine:
         return levels
 
     def update_grid_spacing(self, new_spacing: float):
+        """更新网格间距，同时重算当前档位避免跨档漂移"""
+        old_spacing = self.last_grid_spacing
         self.last_grid_spacing = new_spacing
+        if old_spacing != 0 and abs(new_spacing - old_spacing) > 0.0001:
+            # spacing变了，用新spacing重新计算当前档位
+            # 并重置peak/valley，避免用旧档位触发错误交易
+            new_level = self._price_to_level(self.last_price)
+            logger.info(f"[GridEngine] 间距 {old_spacing:.4f}→{new_spacing:.4f}, 档位重算: {self.current_level}→{new_level}")
+            self.current_level = new_level
+            self.peak_level = 0
+            self.valley_level = 0
 
     def update_price(self, current_price: float):
         self.last_price = current_price
