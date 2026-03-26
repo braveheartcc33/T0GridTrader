@@ -117,17 +117,8 @@ class GridEngine:
         return levels
 
     def update_grid_spacing(self, new_spacing: float):
-        """更新网格间距，同时重算当前档位避免跨档漂移"""
-        old_spacing = self.last_grid_spacing
+        """更新网格间距"""
         self.last_grid_spacing = new_spacing
-        if old_spacing != 0 and abs(new_spacing - old_spacing) > 0.0001:
-            # spacing变了，用新spacing重新计算当前档位
-            # 并重置peak/valley，避免用旧档位触发错误交易
-            new_level = self._price_to_level(self.last_price)
-            logger.info(f"[GridEngine] 间距 {old_spacing:.4f}→{new_spacing:.4f}, 档位重算: {self.current_level}→{new_level}")
-            self.current_level = new_level
-            self.peak_level = 0
-            self.valley_level = 0
 
     def update_price(self, current_price: float):
         self.last_price = current_price
@@ -239,39 +230,62 @@ class GridEngine:
             return None, avg_cost
 
         # 5. 正常网格交易（价格在边界内）
-        # 每一格对应固定股数，持仓与目标持仓对齐
-        # 只有档位发生变化时才交易（防止同一档位重复触发）
-        if current_level == self.current_level:
-            return None, avg_cost
+        # 三条核心铁律：
+        #   铁律1：累计买/卖 <= 底仓
+        #   铁律2：有效水位线配对（失败不移动水位线）
+        #   铁律3：只看档位差值，不看方向
+        #
+        # 目标持仓 = 底仓 + 累计买 - 累计卖
+        # 当前档位与目标持仓的差值决定买卖方向和数量
+        #
+        # 有效水位线(effective_level)：记录最后一次成功交易的档位
+        # - 只能在水位线的"同一侧"交易（卖要在上方，买要在下方）
+        # - 失败则水位线不动，下一次继续尝试
 
-        target_position = self.base_position - current_level * self.shares_per_grid
-        trade_shares = self.current_position - target_position
+        target_position = self.base_position + self.cumulative_buys - self.cumulative_sells
+        trade_shares = abs(self.current_position - target_position)
 
         if trade_shares == 0:
             return None, avg_cost
 
-        if trade_shares > 0:
-            # 需要卖出（持仓多于目标）
-            # 可卖出 = 底仓 - 今日累计净卖出（买的不算！）
-            available_to_sell = max(0, self.base_position - self.cumulative_sells)
-            actual_sell = min(trade_shares, max(0, available_to_sell))
-            if actual_sell > 0:
-                pos_before = self.current_position
-                record = self._record_trade(
-                    "SELL", current_price, actual_sell, current_level,
-                    f"网格交易@{current_price}, 档位={current_level}, 持仓{pos_before}→{target_position}", current_time
-                )
-                logger.info(f"[GridEngine] 网格卖出: {actual_sell}股@{current_price}, 档位={current_level}, 持仓{pos_before}→{self.current_position}")
-                self.current_level = current_level
-                return record, avg_cost
-        else:
-            # 需要买入（持仓少于目标）
-            buy_shares = -trade_shares
+        if self.current_position > target_position:
+            # 持仓 > 目标，需要卖出
+            # 铁律2：必须在水位线上方才能卖
+            if current_level <= self.effective_level:
+                logger.info(f"[GridEngine] 跳过卖出: 档位={current_level} <= 水位线={self.effective_level}（未突破水位线）")
+                return None, avg_cost
+            # 铁律1：检查可卖额度
+            actual_sell = min(trade_shares, max(0, self.base_position - self.cumulative_sells))
+            if actual_sell == 0:
+                logger.info(f"[GridEngine] 拒绝卖出: 累计卖={self.cumulative_sells}已达上限{self.base_position}")
+                return None, avg_cost
+            pos_before = self.current_position
             record = self._record_trade(
-                "BUY", current_price, buy_shares, current_level,
-                f"网格交易@{current_price}, 档位={current_level}, 持仓{self.current_position}→{target_position}", current_time
+                "SELL", current_price, actual_sell, current_level,
+                f"网格交易@{current_price}, 档位={current_level}, 持仓{pos_before}→{target_position}, 水位线{effective_level}→{current_level}", current_time
             )
-            logger.info(f"[GridEngine] 网格买入: {buy_shares}股@{current_price}, 档位={current_level}, 持仓{self.current_position - buy_shares}→{self.current_position}")
+            logger.info(f"[GridEngine] 网格卖出: {actual_sell}股@{current_price}, 档位={current_level}, 持仓{pos_before}→{self.current_position}, 水位线{effective_level}→{current_level}")
+            self.effective_level = current_level
+            self.current_level = current_level
+            return record, avg_cost
+
+        else:
+            # 持仓 < 目标，需要买入
+            # 铁律2：必须在水位线下方才能买
+            if current_level >= self.effective_level:
+                logger.info(f"[GridEngine] 跳过买入: 档位={current_level} >= 水位线={self.effective_level}（未突破水位线）")
+                return None, avg_cost
+            # 铁律1：检查可买额度
+            actual_buy = min(trade_shares, max(0, self.base_position - self.cumulative_buys))
+            if actual_buy == 0:
+                logger.info(f"[GridEngine] 拒绝买入: 累计买={self.cumulative_buys}已达上限{self.base_position}")
+                return None, avg_cost
+            record = self._record_trade(
+                "BUY", current_price, actual_buy, current_level,
+                f"网格交易@{current_price}, 档位={current_level}, 持仓{self.current_position}→{target_position}, 水位线{effective_level}→{current_level}", current_time
+            )
+            logger.info(f"[GridEngine] 网格买入: {actual_buy}股@{current_price}, 档位={current_level}, 持仓{self.current_position}→{self.current_position}, 水位线{effective_level}→{current_level}")
+            self.effective_level = current_level
             self.current_level = current_level
             return record, avg_cost
 
