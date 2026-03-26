@@ -237,57 +237,56 @@ class GridEngine:
         #
         # 目标持仓 = 底仓 + 累计买 - 累计卖
         # 当前档位与目标持仓的差值决定买卖方向和数量
+        # 5. 正常网格交易（简化版）
+        # 规则1：累计买<=底仓，累计卖<=底仓
+        # 规则2：每档有固定目标持仓 = 底仓 - 档位×每格股数
+        # 规则3：可交易量不够时，能买/卖多少是多少
         #
-        # 有效水位线(effective_level)：记录最后一次成功交易的档位
-        # - 只能在水位线的"同一侧"交易（卖要在上方，买要在下方）
-        # - 失败则水位线不动，下一次继续尝试
-
-        target_position = self.base_position + self.cumulative_buys - self.cumulative_sells
+        # 持仓 > 目标 → 卖出（价格涨上去了，应该卖出）
+        # 持仓 < 目标 → 买入（价格掉下来了，应该买回来）
+        # 目标持仓 = 底仓 - 档位 × 每格股数
+        # 例如：底仓10000，+5档 → 目标5000（卖）；-5档 → 目标15000（买）
+        target_position = self.base_position - current_level * self.shares_per_grid
         trade_shares = abs(self.current_position - target_position)
 
         if trade_shares == 0:
             return None, avg_cost
 
         if self.current_position > target_position:
-            # 持仓 > 目标，需要卖出
-            # 铁律2：必须在水位线上方才能卖
-            if current_level <= self.effective_level:
-                logger.info(f"[GridEngine] 跳过卖出: 档位={current_level} <= 水位线={self.effective_level}（未突破水位线）")
+            # 持仓 > 目标 → 需要卖出
+            # 可卖额度 = 底仓 - 累计卖出
+            available = max(0, self.base_position - self.cumulative_sells)
+            actual = min(trade_shares, available)
+            if actual > 0:
+                pos_before = self.current_position
+                record = self._record_trade(
+                    "SELL", current_price, actual, current_level,
+                    f"网格@{current_price} 档={current_level} 持仓{pos_before}→{target_position}", current_time
+                )
+                logger.info(f"[GridEngine] 卖出: {actual}股@{current_price} 档={current_level} 持仓{pos_before}→{self.current_position}")
+                self.current_level = current_level
+                return record, avg_cost
+            else:
+                logger.info(f"[GridEngine] 跳过卖出: 可卖额度=0（累计已卖{self.cumulative_sells}股）")
+                self.current_level = current_level
                 return None, avg_cost
-            # 铁律1：检查可卖额度
-            actual_sell = min(trade_shares, max(0, self.base_position - self.cumulative_sells))
-            if actual_sell == 0:
-                logger.info(f"[GridEngine] 拒绝卖出: 累计卖={self.cumulative_sells}已达上限{self.base_position}")
-                return None, avg_cost
-            pos_before = self.current_position
-            record = self._record_trade(
-                "SELL", current_price, actual_sell, current_level,
-                f"网格交易@{current_price}, 档位={current_level}, 持仓{pos_before}→{target_position}, 水位线{effective_level}→{current_level}", current_time
-            )
-            logger.info(f"[GridEngine] 网格卖出: {actual_sell}股@{current_price}, 档位={current_level}, 持仓{pos_before}→{self.current_position}, 水位线{effective_level}→{current_level}")
-            self.effective_level = current_level
-            self.current_level = current_level
-            return record, avg_cost
-
         else:
-            # 持仓 < 目标，需要买入
-            # 铁律2：必须在水位线下方才能买
-            if current_level >= self.effective_level:
-                logger.info(f"[GridEngine] 跳过买入: 档位={current_level} >= 水位线={self.effective_level}（未突破水位线）")
+            # 持仓 < 目标 → 需要买入
+            # 可买额度 = 底仓 - 累计买入
+            available = max(0, self.base_position - self.cumulative_buys)
+            actual = min(trade_shares, available)
+            if actual > 0:
+                record = self._record_trade(
+                    "BUY", current_price, actual, current_level,
+                    f"网格@{current_price} 档={current_level} 持仓{self.current_position}→{target_position}", current_time
+                )
+                logger.info(f"[GridEngine] 买入: {actual}股@{current_price} 档={current_level} 持仓{self.current_position}→{self.current_position}")
+                self.current_level = current_level
+                return record, avg_cost
+            else:
+                logger.info(f"[GridEngine] 跳过买入: 可买额度=0（累计已买{self.cumulative_buys}股）")
+                self.current_level = current_level
                 return None, avg_cost
-            # 铁律1：检查可买额度
-            actual_buy = min(trade_shares, max(0, self.base_position - self.cumulative_buys))
-            if actual_buy == 0:
-                logger.info(f"[GridEngine] 拒绝买入: 累计买={self.cumulative_buys}已达上限{self.base_position}")
-                return None, avg_cost
-            record = self._record_trade(
-                "BUY", current_price, actual_buy, current_level,
-                f"网格交易@{current_price}, 档位={current_level}, 持仓{self.current_position}→{target_position}, 水位线{effective_level}→{current_level}", current_time
-            )
-            logger.info(f"[GridEngine] 网格买入: {actual_buy}股@{current_price}, 档位={current_level}, 持仓{self.current_position}→{self.current_position}, 水位线{effective_level}→{current_level}")
-            self.effective_level = current_level
-            self.current_level = current_level
-            return record, avg_cost
 
         return None, avg_cost
 
