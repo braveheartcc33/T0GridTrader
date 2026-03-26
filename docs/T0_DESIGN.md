@@ -1,6 +1,6 @@
-# 网格交易 T+0 设计文档（v3 - 破网停机版）
+# 网格交易 T+0 设计文档
 
-> 文档版本：v3 | 最后更新：2026-03-26
+> 文档版本：v4 | 最后更新：2026-03-26
 
 ---
 
@@ -36,7 +36,7 @@
 
 ---
 
-## 2. 核心逻辑（破网停机版）
+## 2. 核心逻辑
 
 ### 2.1 设计原则
 
@@ -93,27 +93,46 @@ available_to_sell = base_position - net_short
 
 ---
 
-## 4. 盘中正常交易逻辑（峰值/谷值版）
+## 4. 盘中正常交易逻辑
 
-> 本版本采用"峰值/谷值"追踪，避免在震荡市中错误追加交易
+> 核心原则：每一格的变化 = 买卖1份（1000股），持仓与目标持仓对齐
 
-当价格档位在 [-5, +5] 范围内时：
+### 4.1 档位与目标持仓
 
-1. 计算 `price_diff = current_price - prev_price`
-2. 如果 `|price_diff| < spacing × 80%` → **噪声过滤，不交易**
-3. 如果 `price_diff > 0` → **向上穿越格子边界**
-   - **只在新高位时卖出**：必须 `current_level > peak_level` 才卖出
-   - 卖出后更新 `peak_level = current_level`
-4. 如果 `price_diff < 0` → **向下穿越格子边界**
-   - **只在新低位时买回**：必须 `current_level < valley_level` 才买回
-   - 买回后更新 `valley_level = current_level`
+| 档位 | 目标持仓 | 与底仓的差 |
+|------|---------|-----------|
+| +5 | 5000 | -5000（卖5份） |
+| +4 | 6000 | -4000（卖4份） |
+| +3 | 7000 | -3000（卖3份） |
+| +2 | 8000 | -2000（卖2份） |
+| +1 | 9000 | -1000（卖1份） |
+| **0** | **10000** | **底仓** |
+| -1 | 11000 | +1000（买1份） |
+| -2 | 12000 | +2000（买2份） |
 
-> 当 `current_position == base_position`（持仓回归底仓）时，重置 `peak_level = 0, valley_level = 0`
+### 4.2 交易规则
 
-### 卖出逻辑
-- 计算 `net_short = cumulative_sells`（买的不算！）
-- `available_to_sell = base_position - net_short`
-- `can_sell = min(穿越格子数 × 每格股数, available_to_sell)`
+**公式**：`目标持仓 = 底仓 - 档位 × 每格股数`
+**交易量**：`trade = 当前持仓 - 目标持仓`（正=卖，负=买）
+
+**规则**：
+1. 只有档位**发生变化**时才交易（防止同一档位重复触发）
+2. 卖出时受 T+0 约束：`可卖 = 底仓 - 累计净卖出`
+3. 买入时不受 T+0 约束
+
+### 4.3 交易示例
+
+假设：基准价=0.717，间距=0.0027，每格=1000股，底仓=10000股
+
+| 时刻 | 价格 | 档位 | 变化 | 目标持仓 | 当前持仓 | 交易 | 原因 |
+|------|------|------|------|---------|---------|------|------|
+| T1 | 0.723 | +2 | 0→+2 | 8000 | 10000 | 卖2000 | 持仓>目标 |
+| T2 | 0.721 | +1 | +2→+1 | 9000 | 8000 | 买1000 | 持仓<目标 |
+| T3 | 0.724 | +3 | +1→+3 | 7000 | 9000 | 卖2000 | 持仓>目标 |
+| T4 | 0.722 | +2 | +3→+2 | 8000 | 7000 | 买1000 | 持仓<目标 |
+| T5 | 0.717 | 0 | +2→0 | 10000 | 8000 | 买2000 | 持仓<目标，回到0档 |
+
+> 持仓回到0档（=底仓）时，清空所有T+0交易记录
 
 ---
 
@@ -159,53 +178,53 @@ available_to_sell = base_position - net_short
 ```python
 self.MAX_LEVEL = grid_count // 2   # = 5
 self.MIN_LEVEL = -self.MAX_LEVEL   # = -5
-self.cumulative_sells = 0         # 累计卖出
-self.cumulative_buys = 0           # 累计买回
+self.cumulative_sells = 0          # 累计卖出（买的不算）
+self.current_level = 0             # 当前档位（用于检测档位变化）
 self.yesterday_position = 10000     # 昨日收盘持仓
 ```
 
-### 7.2 check_and_trade 流程图
-
-```
-输入: current_price
-  ↓
-止损检查（亏损≥2%则清仓）
-  ↓
-尾盘检查（14:30后强制平仓）
-  ↓
-非交易时段检查
-  ↓
-网格边界检查
-  ↓ [current_level > MAX_LEVEL] → 暂停，等待尾盘
-  ↓ [current_level < MIN_LEVEL] → 暂停，等待尾盘
-  ↓ [边界内]
-网格交易（涨卖跌买）
-  ↓
-输出: (TradeRecord or None, avg_cost)
-```
-
-### 7.3 force_close_all_t0
+### 7.2 check_and_trade 核心逻辑
 
 ```python
-def force_close_all_t0(self, current_price, current_time=None):
-    while self.current_position != self.yesterday_position:
-        if self.current_position > self.yesterday_position:
-            self._record_trade("SELL", ...)  # 多退
-        else:
-            self._record_trade("BUY", ...)   # 少补
+def check_and_trade(self, current_price, current_time=None):
+    # 1. 止损检查
+    # 2. 尾盘强制平仓
+    # 3. 非交易时段检查
+    # 4. 网格边界熔断
+
+    # 5. 正常网格交易
+    # 只有档位变化时才交易
+    current_level = self._price_to_level(current_price)
+    if current_level == self.current_level:
+        return None  # 档位未变，不交易
+
+    # 目标持仓 = 底仓 - 档位 × 每格股数
+    target = self.base_position - current_level * self.shares_per_grid
+    trade_shares = self.current_position - target
+
+    if trade_shares > 0:
+        # 卖出（受T+0约束）
+        available = self.base_position - self.cumulative_sells
+        actual = min(trade_shares, max(0, available))
+        if actual > 0:
+            self._record_trade("SELL", current_price, actual, current_level, ...)
+            self.current_level = current_level
+    else:
+        # 买入
+        self._record_trade("BUY", current_price, -trade_shares, current_level, ...)
+        self.current_level = current_level
 ```
 
 ---
 
-## 8. 与旧版（连续5格版）的对比
+## 8. 与旧版对比
 
-| 项目 | 旧版（连续5格） | 新版（破网停机） |
+| 项目 | 旧版（峰值追踪） | 新版（持仓对齐） |
 |------|----------------|----------------|
-| 触发条件 | 连续穿越5格 | 超出±5档 |
-| 计数器 | 需维护方向+计数 | 无需计数 |
-| 震荡市 | 容易误判 | 无误判 |
-| 代码复杂度 | 高（多状态） | 低（边界判断） |
-| 安全性 | 中等 | 更高 |
+| 逻辑 | 只看价格方向 | 持仓与目标对齐 |
+| 换档时 | 只卖新高位/只买新低位 | 每格=1份，精确对齐 |
+| 震荡市 | 可能漏买漏卖 | 不漏 |
+| 代码复杂度 | 中 | 低 |
 
 ---
 
@@ -218,5 +237,5 @@ def force_close_all_t0(self, current_price, current_time=None):
 
 ---
 
-*文档版本：v3（破网停机版）*
+*文档版本：v4*
 *最后更新：2026-03-26*
