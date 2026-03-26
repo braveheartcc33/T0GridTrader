@@ -415,8 +415,8 @@ def main():
     """入口"""
     logger.info("=" * 60)
     logger.info("  A股网格交易系统 - 明日开盘启动")
-    logger.info("  股票: 000825.SZ 太钢不锈")
-    logger.info("  日期: 2026-03-24 (今日收盘，明日启动)")
+    logger.info(f"  股票: {STOCK_CODE} {STOCK_NAME}")
+    logger.info(f"  日期: {__import__('datetime').date.today().strftime('%Y-%m-%d')} (今日收盘，明日启动)")
     logger.info("=" * 60)
 
     app = GridTraderApp()
