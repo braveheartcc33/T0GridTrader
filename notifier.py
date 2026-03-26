@@ -78,7 +78,8 @@ class GridNotifier:
                           shares: int, reason: str = "",
                           available_sell: int = 0, current_position: int = 0,
                           base_position: int = 0, total_levels: int = 10,
-                          atr14: float = 0.0, grid_spacing: float = 0.0) -> bool:
+                          atr14: float = 0.0, grid_spacing: float = 0.0,
+                          spacing_multiplier: float = 1.0) -> bool:
         """
         发送网格交易信号
 
@@ -112,7 +113,7 @@ class GridNotifier:
             f"股票: {STOCK_CODE}\n"
             f"触发价格: {price:.3f}\n"
             f"网格档位: 第 {grid_level} 档（共{total_levels}档）\n"
-            f"ATR(14): {atr14:.4f} | 间距: {grid_spacing:.4f}\n"
+            f"ATR(14): {atr14:.4f} | 间距: {grid_spacing:.4f} (x{spacing_multiplier:.1f})\n"
             f"交易方向: {action}\n"
             f"交易数量: {shares} 股\n"
             f"持仓: {current_position} | 底仓: {base_position} | 可卖出: {available_sell}\n"

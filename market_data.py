@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import tushare as ts
 from config import (
     TUSHARE_TOKEN, TENGXUN_REALTIME_URL,
-    STOCK_CODE, BOLL_PERIOD, ATR_PERIOD
+    STOCK_CODE, BOLL_PERIOD, ATR_PERIOD,
+    GRID_COUNT, BASE_MULTIPLIER, GRID_SPACING_RULES
 )
 from indicators import calc_atr, calc_bollinger_bands
 
@@ -287,6 +288,19 @@ class MarketDataManager:
     def get_indicators(self) -> dict:
         """获取当前指标数据"""
         return self.indicators or {}
+
+    def get_grid_spacing_with_multiplier(self, current_time: datetime = None) -> tuple:
+        """返回 (spacing, multiplier)"""
+        if current_time is None:
+            current_time = datetime.now()
+        base_spacing = self.indicators['atr14'] / GRID_COUNT
+        cur_min = current_time.hour * 60 + current_time.minute
+        multiplier = BASE_MULTIPLIER
+        for (hour, minute), rule_mult in sorted(GRID_SPACING_RULES, reverse=True):
+            if cur_min >= hour * 60 + minute:
+                multiplier = rule_mult
+                break
+        return base_spacing * multiplier, multiplier
 
     def get_grid_spacing(self, current_time: datetime = None) -> float:
         """
