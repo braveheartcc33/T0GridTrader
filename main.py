@@ -39,6 +39,8 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
+from config import STOCK_CODE, STOCK_NAME
+
 class GridTraderApp:
     """
     网格交易主程序
@@ -50,7 +52,7 @@ class GridTraderApp:
         from notifier import GridNotifier
         from trade_logger import TradeLogger
         from config import (
-            STOCK_CODE, STOCK_NAME, GRID_COUNT, SHARES_PER_GRID,
+            GRID_COUNT, SHARES_PER_GRID,
             STOP_LOSS_PCT, INITIAL_BASE_SHARES,
             POLL_INTERVAL_SEC,
             TRADING_MORNING_START, TRADING_MORNING_END,
