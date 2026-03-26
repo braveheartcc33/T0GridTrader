@@ -49,7 +49,14 @@ def fetch_daily_history(ts_code: str = STOCK_CODE,
         end_date = datetime.now().strftime("%Y%m%d")
 
     pro = get_tushare_client()
-    df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    # 判断是否为基金/ETF（代码以 1或5 开头）
+    symbol = ts_code.split('.')[0]
+    is_fund = symbol.startswith('1') or symbol.startswith('5')
+    
+    if is_fund:
+        df = pro.fund_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    else:
+        df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
     df = df.sort_values('trade_date').reset_index(drop=True)
 
     logger.info(f"[MarketData] 获取历史K线 {ts_code} 从 {start_date} 到 {end_date}，共 {len(df)} 条")
