@@ -93,8 +93,6 @@ class GridEngine:
         self.realized_pnl = 0.0
         self.total_pnl = 0.0
 
-        # 止损标记
-
         # 构建网格
         self.grid_levels = self._build_grid()
 
