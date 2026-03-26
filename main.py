@@ -83,7 +83,7 @@ class GridTraderApp:
 
         logger.info("=" * 60)
         logger.info("  网格交易系统初始化")
-        logger.info(f"  股票: {STOCK_CODE} {STOCK_NAME}")
+        logger.info(f"  股票: {STOCK_CODE}")
         logger.info(f"  日期: {date.today()}")
         logger.info("=" * 60)
 
@@ -415,7 +415,7 @@ def main():
     """入口"""
     logger.info("=" * 60)
     logger.info("  A股网格交易系统 - 明日开盘启动")
-    logger.info(f"  股票: {STOCK_CODE} {STOCK_NAME}")
+    logger.info(f"  股票: {STOCK_CODE}")
     logger.info(f"  日期: {__import__('datetime').date.today().strftime('%Y-%m-%d')} (今日收盘，明日启动)")
     logger.info("=" * 60)
 
