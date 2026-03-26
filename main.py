@@ -244,6 +244,8 @@ class GridTraderApp:
                 # 飞书通知
                 # 获取当前可卖出数量
                 status = self.engine.get_status()
+                indicators = self.market_mgr.get_indicators()
+                spacing = self.market_mgr.get_grid_spacing()
                 self.notifier.send_trade_signal(
                     signal_type=record.action,
                     price=record.price,
@@ -253,6 +255,8 @@ class GridTraderApp:
                     reason=record.reason,
                     available_sell=status.get('available_sell_quota', 0),
                     total_levels=self.engine.MAX_LEVEL * 2,
+                    atr14=indicators.get('atr14', 0),
+                    grid_spacing=spacing,
                 )
 
             # 每30分钟状态汇报

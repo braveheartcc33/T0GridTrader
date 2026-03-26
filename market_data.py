@@ -284,6 +284,10 @@ class MarketDataManager:
         """获取实时价格（腾讯接口）"""
         return fetch_realtime_price(self.qq_code)
 
+    def get_indicators(self) -> dict:
+        """获取当前指标数据"""
+        return self.indicators or {}
+
     def get_grid_spacing(self, current_time: datetime = None) -> float:
         """
         根据当前时间计算动态网格间距
