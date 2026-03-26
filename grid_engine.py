@@ -102,6 +102,8 @@ class GridEngine:
 
         # 实时价格
         self.last_price: float = base_price
+        # 上次成交价格（用于控制最小价格变动门槛）
+        self.last_trade_price: float = base_price
 
         logger.info(f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
                     f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}, "
@@ -184,7 +186,13 @@ class GridEngine:
         avg_cost = self.position_cost
         current_level = self._price_to_level(current_price)
 
-        # 1. 止损检查
+        # 0. 最小价格变动门槛：两次交易之间价格变动必须 >= 一个网格间距
+        price_change = abs(current_price - self.last_trade_price)
+        if price_change < self.last_grid_spacing:
+            logger.debug(f"[GridEngine] 跳过：价格变动{price_change:.4f} < 间距{self.last_grid_spacing:.4f}")
+            return None, avg_cost
+
+        # 1. 止损检查（不受最小价格变动门槛约束）
         loss = (current_price - self.base_price) / self.base_price
         if loss <= self.stop_loss_pct and not self.stop_loss_triggered:
             self.stop_loss_triggered = True
@@ -192,10 +200,11 @@ class GridEngine:
                 "SELL", current_price, self.current_position,
                 0, f"止损触发, 亏损{loss*100:.2f}%, 清仓", current_time
             )
+            self.last_trade_price = current_price
             logger.warning(f"[GridEngine] ⚠️ 止损触发! 价格={current_price}, 亏损={loss*100:.2f}%")
             return record, avg_cost
 
-        # 2. 尾盘30分钟强制平仓
+        # 2. 尾盘30分钟强制平仓（不受最小价格变动门槛约束）
         if self._is_closing_window(current_time):
             diff = self.current_position - self.yesterday_position
             if diff > 0:
@@ -204,6 +213,7 @@ class GridEngine:
                     current_level,
                     f"尾盘强制平仓, 持仓{self.current_position}→{self.yesterday_position}", current_time
                 )
+                self.last_trade_price = current_price
                 logger.info(f"[GridEngine] 尾盘平仓: 卖{diff}股@{current_price}")
                 return record, avg_cost
             elif diff < 0:
@@ -212,6 +222,7 @@ class GridEngine:
                     current_level,
                     f"尾盘补回, 持仓{self.current_position}→{self.yesterday_position}", current_time
                 )
+                self.last_trade_price = current_price
                 logger.info(f"[GridEngine] 尾盘补仓: 买{-diff}股@{current_price}")
                 return record, avg_cost
             return None, avg_cost
@@ -229,23 +240,11 @@ class GridEngine:
             logger.info(f"[GridEngine] ⚠️ 价格超出网格下限(档位{current_level}<{self.MIN_LEVEL})，暂停交易，等待尾盘")
             return None, avg_cost
 
-        # 5. 正常网格交易（价格在边界内）
-        # 三条核心铁律：
-        #   铁律1：累计买/卖 <= 底仓
-        #   铁律2：有效水位线配对（失败不移动水位线）
-        #   铁律3：只看档位差值，不看方向
-        #
-        # 目标持仓 = 底仓 + 累计买 - 累计卖
-        # 当前档位与目标持仓的差值决定买卖方向和数量
-        # 5. 正常网格交易（简化版）
+        # 5. 正常网格交易
         # 规则1：累计买<=底仓，累计卖<=底仓
         # 规则2：每档有固定目标持仓 = 底仓 - 档位×每格股数
         # 规则3：可交易量不够时，能买/卖多少是多少
-        #
-        # 持仓 > 目标 → 卖出（价格涨上去了，应该卖出）
-        # 持仓 < 目标 → 买入（价格掉下来了，应该买回来）
-        # 目标持仓 = 底仓 - 档位 × 每格股数
-        # 例如：底仓10000，+5档 → 目标5000（卖）；-5档 → 目标15000（买）
+        # 附加约束：两次交易之间价格变动必须 >= 一个网格间距
         target_position = self.base_position - current_level * self.shares_per_grid
         trade_shares = abs(self.current_position - target_position)
 
@@ -264,6 +263,7 @@ class GridEngine:
                     f"网格@{current_price} 档={current_level} 持仓{pos_before}→{target_position}", current_time
                 )
                 logger.info(f"[GridEngine] 卖出: {actual}股@{current_price} 档={current_level} 持仓{pos_before}→{self.current_position}")
+                self.last_trade_price = current_price
                 self.current_level = current_level
                 return record, avg_cost
             else:
@@ -281,6 +281,7 @@ class GridEngine:
                     f"网格@{current_price} 档={current_level} 持仓{self.current_position}→{target_position}", current_time
                 )
                 logger.info(f"[GridEngine] 买入: {actual}股@{current_price} 档={current_level} 持仓{self.current_position}→{self.current_position}")
+                self.last_trade_price = current_price
                 self.current_level = current_level
                 return record, avg_cost
             else:
@@ -372,4 +373,5 @@ class GridEngine:
         self.cumulative_sells = 0
         self.cumulative_buys = 0
         self.current_level = 0
+        self.last_trade_price = self.base_price
         logger.info("[GridEngine] 日内重置完成")
