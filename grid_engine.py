@@ -252,8 +252,8 @@ class GridEngine:
 
         if trade_shares > 0:
             # 需要卖出（持仓多于目标）
-            net_short = self.cumulative_sells  # 买的不算！
-            available_to_sell = self.base_position - net_short
+            # 可卖出 = 底仓 - 今日累计净卖出（买的不算！）
+            available_to_sell = max(0, self.base_position - self.cumulative_sells)
             actual_sell = min(trade_shares, max(0, available_to_sell))
             if actual_sell > 0:
                 pos_before = self.current_position
@@ -304,7 +304,10 @@ class GridEngine:
         return records
 
     def get_status(self) -> dict:
-        net_short = self.cumulative_sells - self.cumulative_buys
+        # available_sell = 底仓 - 今日累计净卖出（买的不算！）
+        # 卖了多少 = cumulative_sells
+        # available_sell 永远不超过 base_position
+        available_sell = max(0, self.base_position - self.cumulative_sells)
         return {
             'base_price': self.base_price,
             'current_price': self.last_price,
@@ -312,8 +315,8 @@ class GridEngine:
             'current_position': self.current_position,
             'yesterday_position': self.yesterday_position,
             'position_cost': self.position_cost,
-            'net_short': net_short,
-            'available_sell_quota': self.base_position - net_short,
+            'cumulative_sells': self.cumulative_sells,
+            'available_sell_quota': available_sell,
             'today_float_pnl': (self.last_price - self.position_cost) * self.current_position,
             'today_realized_pnl': self.today_realized_pnl,
             'realized_pnl': self.realized_pnl,
