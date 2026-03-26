@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+state.json
+*.csv
+run_grid.sh
+
