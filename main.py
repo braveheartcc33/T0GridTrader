@@ -242,6 +242,8 @@ class GridTraderApp:
                 self._save_state()
 
                 # 飞书通知
+                # 获取当前可卖出数量
+                status = self.engine.get_status()
                 self.notifier.send_trade_signal(
                     signal_type=record.action,
                     price=record.price,
@@ -249,6 +251,8 @@ class GridTraderApp:
                     action="买入" if record.action == "BUY" else "卖出",
                     shares=record.shares,
                     reason=record.reason,
+                    available_sell=status.get('available_sell_quota', 0),
+                    total_levels=self.engine.MAX_LEVEL * 2,
                 )
 
             # 每30分钟状态汇报
