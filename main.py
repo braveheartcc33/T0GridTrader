@@ -266,7 +266,7 @@ class GridTraderApp:
             logger.info(
                 f"[Tick] 价格={price:.3f} | "
                 f"持仓={status['current_position']}股 "
-                f"(成本={status['position_cost']:.4f}, T+0={status['t0_shares']}) | "
+                f"(成本={status['position_cost']:.4f}, T+0={status['available_sell_quota']}) | "
                 f"已实现={status['today_realized_pnl']:.2f} | "
                 f"浮动={status['today_float_pnl']:.2f} | "
                 f"间距={current_spacing:.4f} | 档位={status['current_level']}"
