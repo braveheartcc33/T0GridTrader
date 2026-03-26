@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from config import (
-    GRID_COUNT, SHARES_PER_GRID, STOP_LOSS_PCT, INITIAL_BASE_SHARES,
+    GRID_COUNT, SHARES_PER_GRID, INITIAL_BASE_SHARES,
     TRADING_MORNING_START, TRADING_MORNING_END,
     TRADING_AFTERNOON_START, TRADING_AFTERNOON_END,
 )
@@ -47,7 +47,7 @@ class GridEngine:
                  base_price: float,
                  grid_count: int = GRID_COUNT,
                  shares_per_grid: int = SHARES_PER_GRID,
-                 stop_loss_pct: float = STOP_LOSS_PCT,
+         
                  initial_base_shares: int = INITIAL_BASE_SHARES,
                  atr14: float = None,
                  boll_upper: float = None,
@@ -57,7 +57,6 @@ class GridEngine:
         self.base_price = base_price
         self.grid_count = grid_count
         self.shares_per_grid = shares_per_grid
-        self.stop_loss_pct = stop_loss_pct
         self.initial_base_shares = initial_base_shares
         self.atr14 = atr14
         self.boll_upper = boll_upper
@@ -95,7 +94,6 @@ class GridEngine:
         self.total_pnl = 0.0
 
         # 止损标记
-        self.stop_loss_triggered = False
 
         # 构建网格
         self.grid_levels = self._build_grid()
@@ -192,19 +190,7 @@ class GridEngine:
             logger.debug(f"[GridEngine] 跳过：价格变动{price_change:.4f} < 间距{self.last_grid_spacing:.4f}")
             return None, avg_cost
 
-        # 1. 止损检查（不受最小价格变动门槛约束）
-        loss = (current_price - self.base_price) / self.base_price
-        if loss <= self.stop_loss_pct and not self.stop_loss_triggered:
-            self.stop_loss_triggered = True
-            record = self._record_trade(
-                "SELL", current_price, self.current_position,
-                0, f"止损触发, 亏损{loss*100:.2f}%, 清仓", current_time
-            )
-            self.last_trade_price = current_price
-            logger.warning(f"[GridEngine] ⚠️ 止损触发! 价格={current_price}, 亏损={loss*100:.2f}%")
-            return record, avg_cost
-
-        # 2. 尾盘30分钟强制平仓（不受最小价格变动门槛约束）
+        # 1. 尾盘30分钟强制平仓（不受最小价格变动门槛约束）
         if self._is_closing_window(current_time):
             diff = self.current_position - self.yesterday_position
             if diff > 0:
@@ -339,7 +325,6 @@ class GridEngine:
             'boll_upper': self.boll_upper,
             'boll_middle': self.boll_middle,
             'boll_lower': self.boll_lower,
-            'stop_loss_triggered': self.stop_loss_triggered,
             'grid_count': self.grid_count,
             'base_spacing': self.base_spacing,
             'current_spacing': self.last_grid_spacing,
@@ -369,7 +354,6 @@ class GridEngine:
         self.today_realized_pnl = 0.0
         self.realized_pnl = 0.0
         self.trade_records = []
-        self.stop_loss_triggered = False
         self.cumulative_sells = 0
         self.cumulative_buys = 0
         self.current_level = 0
