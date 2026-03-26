@@ -429,51 +429,13 @@ def main():
     logger.info("=" * 60)
 
     try:
-        app.initialize()
-
-        status = app.engine.get_status()
-        print("\n" + "=" * 50)
-        print("  系统初始化验证完成")
-        print("=" * 50)
-        print(f"  股票: {app.STOCK_CODE} {app.STOCK_NAME}")
-        print(f"  基准价: {status['base_price']:.4f}")
-        print(f"  ATR(14): {status['atr14']:.4f}")
-        print(f"  每格间距(ATR/10): {status['atr14']/10:.4f}")
-        print(f"  布林上轨: {status['boll_upper']:.4f}")
-        print(f"  布林中轨: {status['boll_middle']:.4f}")
-        print(f"  布林下轨: {status['boll_lower']:.4f}")
-        print(f"  底仓股数: {status['base_position']}")
-        print(f"  持仓成本: {status['position_cost']:.4f}")
-        print(f"  网格档位: {status['grid_count']}")
-        print(f"  止损幅度: {app.engine.stop_loss_pct*100:.1f}%")
-        print(f"  当前档位: {status['current_level']}")
-        print("=" * 50)
-
-        # 测试腾讯实时行情
-        from market_data import fetch_realtime_price, get_qq_code
-        qq_code = get_qq_code(app.STOCK_CODE)
-        print(f"\n  测试腾讯实时行情 ({qq_code})...")
-        demo_price = fetch_realtime_price(qq_code)
-        if demo_price:
-            print(f"  行情接口正常，当前价格: {demo_price:.3f}")
-        else:
-            print("  行情接口获取失败（盘后无数据，正常）")
-
-        # 打印已创建的持久化文件
-        print("\n  持久化文件:")
-        for fname in ["trades_20260324.csv", "positions_20260324.csv", "state.json"]:
-            fpath = os.path.join(BASE_DIR, fname)
-            exists = os.path.exists(fpath)
-            print(f"    {fname}: {'✅ 已创建' if exists else '❌ 未找到'}")
-
-        # 演示打印复盘摘要（今日无交易）
-        app.trade_logger.print_day_summary()
-
-        print("\n  ✅ 系统验证通过，明日 09:25 自动启动交易")
+        # 正式启动交易系统
+        logger.info("[Main] 正式启动交易系统...")
+        app.run()
 
     except Exception as e:
-        logger.exception(f"[Demo] 初始化失败: {e}")
-        print(f"\n❌ 初始化失败: {e}")
+        logger.exception(f"[Fatal] 系统启动失败: {e}")
+        print(f"\n❌ 系统启动失败: {e}")
 
 
 if __name__ == "__main__":
