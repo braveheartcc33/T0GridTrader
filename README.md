@@ -15,8 +15,8 @@
 编辑 `config.py` 即可配置任意股票或ETF：
 
 ```python
-STOCK_CODE = "000825.SZ"    # 任意A股代码
-STOCK_NAME = "太钢不锈"       # 股票名称
+STOCK_CODE = "159567.SZ"  # 任意A股代码或ETF
+STOCK_NAME = "港股创新药ETF"  # 可留空
 ```
 
 支持的标的：
