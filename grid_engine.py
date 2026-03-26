@@ -84,6 +84,13 @@ class GridEngine:
         # T+0 追踪
         self.cumulative_sells = 0
         self.cumulative_buys = 0
+        self.peak_level = 0
+        self.valley_level = 0
+
+        # 峰值/谷值追踪（只在持仓偏离底仓时有效）
+        # 持仓回归底仓时重置为0
+        self.peak_level = 0   # 持仓>底仓时，记录达到的最高档位
+        self.valley_level = 0 # 持仓<底仓时，记录达到的最低档位
 
         # 交易记录和盈亏
         self.trade_records: List[TradeRecord] = []
@@ -165,6 +172,12 @@ class GridEngine:
             reason=reason, pnl=pnl, realized_pnl=self.realized_pnl,
         )
         self.trade_records.append(record)
+
+        # 当持仓回归底仓时，重置peak/valley
+        if self.current_position == self.base_position:
+            self.peak_level = 0
+            self.valley_level = 0
+
         return record
 
     def check_and_trade(self, current_price: float, current_time: datetime = None) -> tuple:
@@ -233,27 +246,34 @@ class GridEngine:
             return None, avg_cost
 
         if price_diff > 0:
-            # 价格上涨 → 向上穿越格子边界 → 卖出
-            net_short = self.cumulative_sells  # 买的不算！可卖出只看累计净卖出
-            available_to_sell = self.base_position - net_short
-            levels_crossed = int(round(price_diff / self.last_grid_spacing))
-            can_sell = min(levels_crossed * self.shares_per_grid, max(0, available_to_sell))
-            if can_sell > 0:
-                record = self._record_trade(
-                    "SELL", current_price, can_sell, current_level,
-                    f"网格卖出, 穿{levels_crossed}格@{current_price}", current_time
-                )
-                logger.info(f"[GridEngine] 网格卖出: {can_sell}股@{current_price}, 穿{levels_crossed}格")
-                return record, avg_cost
+            # 价格上涨 → 向上穿越格子边界
+            # 只在新高位时卖出（防止在回调时追加卖出）
+            if current_level > self.peak_level:
+                net_short = self.cumulative_sells  # 买的不算！
+                available_to_sell = self.base_position - net_short
+                levels_crossed = int(round(price_diff / self.last_grid_spacing))
+                # 可卖数量限制：最多卖到"比peak再高levels_crossed"的位置
+                max_additional_sell = min(levels_crossed * self.shares_per_grid, max(0, available_to_sell))
+                if max_additional_sell > 0:
+                    self.peak_level = current_level
+                    record = self._record_trade(
+                        "SELL", current_price, max_additional_sell, current_level,
+                        f"网格卖出, 穿{levels_crossed}格@{current_price}, 新高={current_level}", current_time
+                    )
+                    logger.info(f"[GridEngine] 网格卖出: {max_additional_sell}股@{current_price}, 穿{levels_crossed}格, peak={self.peak_level}")
+                    return record, avg_cost
         else:
-            # 价格下跌 → 向下穿越格子边界 → 买入
-            levels_crossed = int(round(-price_diff / self.last_grid_spacing))
-            record = self._record_trade(
-                "BUY", current_price, levels_crossed * self.shares_per_grid, current_level,
-                f"网格买入, 穿{levels_crossed}格@{current_price}", current_time
-            )
-            logger.info(f"[GridEngine] 网格买入: {levels_crossed * self.shares_per_grid}股@{current_price}, 穿{levels_crossed}格")
-            return record, avg_cost
+            # 价格下跌 → 向下穿越格子边界
+            # 只在创出新低位时买回（不在反弹时追加买入）
+            if self.valley_level == 0 or current_level < self.valley_level:
+                levels_crossed = int(round(-price_diff / self.last_grid_spacing))
+                self.valley_level = current_level
+                record = self._record_trade(
+                    "BUY", current_price, levels_crossed * self.shares_per_grid, current_level,
+                    f"网格买入, 穿{levels_crossed}格@{current_price}, 新低={current_level}", current_time
+                )
+                logger.info(f"[GridEngine] 网格买入: {levels_crossed * self.shares_per_grid}股@{current_price}, 穿{levels_crossed}格, valley={self.valley_level}")
+                return record, avg_cost
 
         return None, avg_cost
 
@@ -335,4 +355,6 @@ class GridEngine:
         self.stop_loss_triggered = False
         self.cumulative_sells = 0
         self.cumulative_buys = 0
+        self.peak_level = 0
+        self.valley_level = 0
         logger.info("[GridEngine] 日内重置完成")
