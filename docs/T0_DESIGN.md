@@ -93,17 +93,25 @@ available_to_sell = base_position - net_short
 
 ---
 
-## 4. 盘中正常交易逻辑
+## 4. 盘中正常交易逻辑（峰值/谷值版）
+
+> 本版本采用"峰值/谷值"追踪，避免在震荡市中错误追加交易
 
 当价格档位在 [-5, +5] 范围内时：
 
 1. 计算 `price_diff = current_price - prev_price`
 2. 如果 `|price_diff| < spacing × 80%` → **噪声过滤，不交易**
-3. 如果 `price_diff > 0` → **向上穿越格子边界 → 卖出**
-4. 如果 `price_diff < 0` → **向下穿越格子边界 → 买入**
+3. 如果 `price_diff > 0` → **向上穿越格子边界**
+   - **只在新高位时卖出**：必须 `current_level > peak_level` 才卖出
+   - 卖出后更新 `peak_level = current_level`
+4. 如果 `price_diff < 0` → **向下穿越格子边界**
+   - **只在新低位时买回**：必须 `current_level < valley_level` 才买回
+   - 买回后更新 `valley_level = current_level`
+
+> 当 `current_position == base_position`（持仓回归底仓）时，重置 `peak_level = 0, valley_level = 0`
 
 ### 卖出逻辑
-- 计算 `net_short = cumulative_sells  # 买的不算`
+- 计算 `net_short = cumulative_sells`（买的不算！）
 - `available_to_sell = base_position - net_short`
 - `can_sell = min(穿越格子数 × 每格股数, available_to_sell)`
 
