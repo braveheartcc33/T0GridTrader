@@ -76,7 +76,8 @@ class GridNotifier:
     def send_trade_signal(self, signal_type: str, price: float,
                           grid_level: int, action: str,
                           shares: int, reason: str = "",
-                          available_sell: int = 0, total_levels: int = 10,
+                          available_sell: int = 0, current_position: int = 0,
+                          base_position: int = 0, total_levels: int = 10,
                           atr14: float = 0.0, grid_spacing: float = 0.0) -> bool:
         """
         发送网格交易信号
@@ -114,7 +115,7 @@ class GridNotifier:
             f"ATR(14): {atr14:.4f} | 间距: {grid_spacing:.4f}\n"
             f"交易方向: {action}\n"
             f"交易数量: {shares} 股\n"
-            f"可卖出(T+0): {available_sell} 股\n"
+            f"持仓: {current_position} | 底仓: {base_position} | 可卖出: {available_sell}\n"
             f"原因: {reason}"
         )
 

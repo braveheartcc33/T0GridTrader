@@ -241,11 +241,11 @@ class GridTraderApp:
                 self._log_position_snapshot()
                 self._save_state()
 
-                # 飞书通知
-                # 获取当前可卖出数量
-                status = self.engine.get_status()
+                # 飞书通知：直接从engine读取最新值，不用get_status()（避免读到旧state）
                 indicators = self.market_mgr.get_indicators()
                 spacing = self.market_mgr.get_grid_spacing()
+                # 可卖出 = max(0, 底仓 - 今日累计卖出)
+                available_sell = max(0, self.engine.base_position - self.engine.cumulative_sells)
                 self.notifier.send_trade_signal(
                     signal_type=record.action,
                     price=record.price,
@@ -253,7 +253,9 @@ class GridTraderApp:
                     action="买入" if record.action == "BUY" else "卖出",
                     shares=record.shares,
                     reason=record.reason,
-                    available_sell=status.get('available_sell_quota', 0),
+                    available_sell=available_sell,
+                    current_position=self.engine.current_position,
+                    base_position=self.engine.base_position,
                     total_levels=self.engine.MAX_LEVEL * 2,
                     atr14=indicators.get('atr14', 0),
                     grid_spacing=spacing,
@@ -276,7 +278,8 @@ class GridTraderApp:
             logger.info(
                 f"[Tick] 价格={price:.3f} | "
                 f"持仓={status['current_position']}股 "
-                f"(成本={status['position_cost']:.4f}, T+0={status['available_sell_quota']}) | "
+                avail = max(0, self.engine.base_position - self.engine.cumulative_sells)
+f"(成本={status['position_cost']:.4f}, 可卖={avail}) | "
                 f"已实现={status['today_realized_pnl']:.2f} | "
                 f"浮动={status['today_float_pnl']:.2f} | "
                 f"间距={current_spacing:.4f} | 档位={status['current_level']}"
@@ -343,6 +346,8 @@ class GridTraderApp:
             'current_position': status['current_position'],
             'position_cost': status['position_cost'],
             'base_position': status['base_position'],
+            'cumulative_sells': status['cumulative_sells'],
+            'current_level': status['current_level'],
             'today_realized_pnl': status['today_realized_pnl'],
             'total_pnl': status['total_pnl'],
             'stop_loss_triggered': status['stop_loss_triggered'],
