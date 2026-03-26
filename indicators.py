@@ -7,7 +7,7 @@ import logging
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
-from config import STOCK_CODE, STOCK_NAME
+from config import STOCK_CODE
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ def verify_atr_calculation():
 
     # 比较
     print("=" * 70)
-    print(f"ATR 计算验证（{STOCK_NAME} {STOCK_CODE}）")
+    print(f"ATR 计算验证（{STOCK_CODE}）")
     print("=" * 70)
     print(f"{'日期':<12} {'TR':>8} {'pandas向量ATR':>14} {'手动WilderATR':>14} {'差异':>10}")
     print("-" * 70)
