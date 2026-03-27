@@ -79,7 +79,10 @@ class GridNotifier:
                           available_sell: int = 0, current_position: int = 0,
                           base_position: int = 0, total_levels: int = 10,
                           atr14: float = 0.0, grid_spacing: float = 0.0,
-                          spacing_multiplier: float = 1.0) -> bool:
+                          spacing_multiplier: float = 1.0,
+                          today_t0: float = None,
+                          today_position_pnl: float = None,
+                          today_total_pnl: float = None) -> bool:
         """
         发送网格交易信号
 
@@ -90,6 +93,9 @@ class GridNotifier:
             action: 买入/卖出描述
             shares: 股数
             reason: 原因说明
+            today_t0: 今日 T0 盈利
+            today_position_pnl: 今日持仓盈亏
+            today_total_pnl: 今日总盈亏
         """
         emoji_map = {
             "BUY": "🟢",
@@ -107,26 +113,36 @@ class GridNotifier:
         }
         title = title_map.get(signal_type, "通知")
 
-        message = (
-            f"{emoji} **{title}**\n"
-            f"时间: {datetime.now().strftime('%H:%M:%S')}\n"
-            f"股票: {STOCK_CODE}\n"
-            f"触发价格: {price:.3f}\n"
-            f"网格档位: 第 {grid_level} 档（共{total_levels}档）\n"
-            f"ATR(14): {atr14:.4f} | 间距: {grid_spacing:.4f} (x{spacing_multiplier:.1f})\n"
-            f"交易方向: {action}\n"
-            f"交易数量: {shares} 股\n"
-            f"持仓: {current_position} | 底仓: {base_position} | 可卖出: {available_sell}\n"
-            f"原因: {reason}"
-        )
+        message_parts = [
+            f"{emoji} **{title}**",
+            f"时间: {datetime.now().strftime('%H:%M:%S')}",
+            f"股票: {STOCK_CODE}",
+            f"触发价格: {price:.3f}",
+            f"网格档位: 第 {grid_level} 档（共{total_levels}档）",
+            f"ATR(14): {atr14:.4f} | 间距: {grid_spacing:.4f} (x{spacing_multiplier:.1f})",
+            f"交易方向: {action}",
+            f"交易数量: {shares} 股",
+            f"持仓: {current_position} | 底仓: {base_position} | 可卖出: {available_sell}",
+            f"原因: {reason}",
+        ]
 
+        # 今日盈亏三因子（T0 / 持仓 / 合计）
+        if today_t0 is not None and today_position_pnl is not None and today_total_pnl is not None:
+            t0_str = f"{'+' if today_t0 >= 0 else ''}{today_t0:.2f}"
+            pos_str = f"{'+' if today_position_pnl >= 0 else ''}{today_position_pnl:.2f}"
+            tot_str = f"{'+' if today_total_pnl >= 0 else ''}{today_total_pnl:.2f}"
+            message_parts.append(f"今日 T0: {t0_str} | 持仓: {pos_str} | 合计: {tot_str}")
+
+        message = "\n".join(message_parts)
         return self.send_text(message)
 
     def send_status_report(self,
                            current_price: float,
                            position: int,
                            base_position: int,
-                           today_pnl: float,
+                           today_t0: float,
+                           today_position_pnl: float,
+                           today_total_pnl: float,
                            grid_status: dict,
                            indicators: dict) -> bool:
         """
@@ -140,7 +156,9 @@ class GridNotifier:
             f"股票: {STOCK_CODE}\n"
             f"当前价格: {current_price:.3f}\n"
             f"持仓状态: {position_type}（{position}股 / 底仓{base_position}股）\n"
-            f"今日盈亏: {'+' if today_pnl >= 0 else ''}{today_pnl:.2f} 元\n"
+            f"T0 盈利: {'+' if today_t0 >= 0 else ''}{today_t0:.2f} 元\n"
+            f"持仓盈亏: {'+' if today_position_pnl >= 0 else ''}{today_position_pnl:.2f} 元\n"
+            f"今日总盈亏: {'+' if today_total_pnl >= 0 else ''}{today_total_pnl:.2f} 元\n"
             f"指标 - ATR(14): {indicators.get('atr14', 0):.4f}\n"
             f"指标 - 布林上轨: {indicators.get('boll_upper', 0):.4f}\n"
             f"指标 - 布林中轨: {indicators.get('boll_middle', 0):.4f}\n"

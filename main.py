@@ -77,6 +77,13 @@ class GridTraderApp:
         self.trade_logger = TradeLogger(BASE_DIR)
         self.engine = None
 
+        # 累计已实现盈亏（扣费后净值），避免 engine.today_realized_pnl（毛）口径不一致
+        self._cumulative_net_pnl = 0.0
+
+        # 今日买卖累计金额（用于计算 T0 盈利）
+        self._today_sell_amount = 0.0
+        self._today_buy_amount = 0.0
+
         # 状态汇报计时
         self.last_status_time = datetime.now()
         self.status_interval_seconds = 30 * 60  # 每30分钟
@@ -246,6 +253,7 @@ class GridTraderApp:
                 spacing, multiplier = self.market_mgr.get_grid_spacing_with_multiplier()
                 # 可卖出 = max(0, 底仓 - 今日累计卖出)
                 available_sell = max(0, self.engine.base_position - self.engine.cumulative_sells)
+                t0, position_pnl, total = self._calc_today_pnl(record.price)
                 self.notifier.send_trade_signal(
                     signal_type=record.action,
                     price=record.price,
@@ -260,6 +268,9 @@ class GridTraderApp:
                     atr14=indicators.get('atr14', 0),
                     grid_spacing=spacing,
                     spacing_multiplier=multiplier,
+                    today_t0=t0,
+                    today_position_pnl=position_pnl,
+                    today_total_pnl=total,
                 )
 
             # 每30分钟状态汇报
@@ -277,12 +288,12 @@ class GridTraderApp:
             # 日志输出
             status = self.engine.get_status()
             avail = max(0, self.engine.base_position - self.engine.cumulative_sells)
+            t0, position_pnl, total = self._calc_today_pnl(price)
             logger.info(
                 f"[Tick] 价格={price:.3f} | "
                 f"持仓={status['current_position']}股 "
                 f"(成本={status['position_cost']:.4f}, 可卖={avail}) | "
-                f"已实现={status['today_realized_pnl']:.2f} | "
-                f"浮动={status['today_float_pnl']:.2f} | "
+                f"T0={t0:.2f} | 持仓={position_pnl:.2f} | 合计={total:.2f} | "
                 f"间距={current_spacing:.4f} | 档位={status['current_level']}"
             )
 
@@ -294,9 +305,35 @@ class GridTraderApp:
     # 持久化方法
     # ------------------------------------------------------------------
 
-    def _log_trade(self, record):
+    def _calc_today_pnl(self, current_price: float) -> tuple:
+        """
+        计算今日盈亏三因子
+        Returns: (t0_profit, position_pnl, total_pnl)
+          - t0_profit      = Σ卖出金额 - Σ买入金额
+          - position_pnl    = (当前价 - 基准价) × 昨日持仓
+          - total_pnl      = t0_profit + position_pnl
+        """
+        t0 = self._today_sell_amount - self._today_buy_amount
+        base_price = self.engine.base_price
+        yesterday_pos = self.engine.yesterday_position
+        position_pnl = (current_price - base_price) * yesterday_pos
+        return t0, position_pnl, t0 + position_pnl
+
+    def _log_trade(self, record, avg_cost=None):
         """将成交记录写入 trades.csv + state.json"""
-        status = self.engine.get_status()
+        # 优先用 record.pre_trade_cost（执行前快照），其次用传入的 avg_cost
+        cost = record.pre_trade_cost if record.pre_trade_cost > 0 else (avg_cost if avg_cost is not None else self.engine.position_cost)
+
+        # 累计今日买卖金额（用于计算 T0 盈利）
+        if record.action == "SELL":
+            self._today_sell_amount += record.price * record.shares
+            gross = record.price * record.shares
+            commission = max(gross * 0.0003, 5.0)
+            stamp_tax = gross * 0.001
+            trade_net_pnl = (record.price - cost) * record.shares - commission - stamp_tax
+            self._cumulative_net_pnl += trade_net_pnl
+        else:
+            self._today_buy_amount += record.price * record.shares
 
         entry = self.trade_logger.log_trade(
             stock_code=self.STOCK_CODE,
@@ -306,26 +343,31 @@ class GridTraderApp:
             shares=record.shares,
             grid_level=record.grid_level,
             reason=record.reason,
-            cumulative_pnl=status['today_realized_pnl'],
-            avg_cost=status['position_cost'],
+            cumulative_pnl=self._cumulative_net_pnl,
+            avg_cost=cost,
         )
+
+        # 计算今日盈亏三因子
+        t0_profit, position_pnl, total_pnl = self._calc_today_pnl(record.price)
 
         logger.info(
             f"[TradeLogger] 成交 #{entry.trade_id} {record.action} "
             f"{record.shares}股@{record.price:.4f} "
             f"金额={record.amount:.2f} 费用={entry.commission+entry.stamp_tax:.2f} "
-            f"实现盈亏={entry.realized_pnl:.2f}"
+            f"T0={t0_profit:.2f} | 持仓={position_pnl:.2f} | 合计={total_pnl:.2f}"
         )
 
     def _log_position_snapshot(self):
         """将当前持仓快照写入 positions.csv"""
         status = self.engine.get_status()
         indicators = self.market_mgr.indicators
+        current_price = status['current_price']
+        t0, position_pnl, total = self._calc_today_pnl(current_price)
 
         self.trade_logger.log_position_snapshot(
             stock_code=self.STOCK_CODE,
             stock_name=self.STOCK_NAME,
-            current_price=status['current_price'],
+            current_price=current_price,
             position_shares=status['current_position'],
             position_cost=status['position_cost'],
             base_position=status['base_position'],
@@ -337,6 +379,9 @@ class GridTraderApp:
             grid_spacing=status['current_spacing'],
             grid_level=status['current_level'],
             base_price=status['base_price'],
+            today_t0=t0,
+            today_position_pnl=position_pnl,
+            today_total_pnl=total,
         )
 
     def _save_state(self):
@@ -353,6 +398,11 @@ class GridTraderApp:
             'total_pnl': status['total_pnl'],
             'stop_loss_triggered': status['stop_loss_triggered'],
             'trade_records': self.engine.get_trade_records(),
+            # 今日买卖累计金额（用于计算 T0 盈利，重启后可恢复）
+            'today_sell_amount': self._today_sell_amount,
+            'today_buy_amount': self._today_buy_amount,
+            # 累计净值已实现盈亏（重启后可恢复）
+            'cumulative_net_pnl': self._cumulative_net_pnl,
         }
         market_state = {
             'atr14': status['atr14'],
@@ -367,17 +417,20 @@ class GridTraderApp:
         """发送状态汇报（飞书）"""
         status = self.engine.get_status()
         indicators = self.market_mgr.indicators
+        current_price = status['current_price']
+        t0, position_pnl, total = self._calc_today_pnl(current_price)
 
         self.notifier.send_status_report(
-            current_price=status['current_price'],
+            current_price=current_price,
             position=status['current_position'],
             base_position=status['base_position'],
-            today_pnl=status['today_realized_pnl'],
+            today_t0=t0,
+            today_position_pnl=position_pnl,
+            today_total_pnl=total,
             grid_status=status,
             indicators=indicators,
         )
-        logger.info(f"[Status] 已发送状态汇报: 持仓={status['current_position']}股, "
-                    f"已实现={status['today_realized_pnl']:.2f}")
+        logger.info(f"[Status] 已发送状态汇报: T0={t0:.2f} | 持仓={position_pnl:.2f} | 合计={total:.2f}")
 
     def run(self):
         """主运行入口"""
@@ -400,6 +453,8 @@ class GridTraderApp:
         try:
             status = self.engine.get_status()
             records = self.engine.get_trade_records()
+            current_price = status['current_price']
+            t0, position_pnl, total = self._calc_today_pnl(current_price)
 
             trades_text = "\n".join([
                 f"{r['timestamp']} {r['action']} {r['price']:.3f}x{r['shares']}={r['amount']:.2f} ({r['reason']})"
@@ -410,15 +465,17 @@ class GridTraderApp:
                 f"📋 **收盘报告**\n"
                 f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"股票: {self.STOCK_CODE} {self.STOCK_NAME}\n"
-                f"收盘价: {status['current_price']:.3f}\n"
+                f"收盘价: {current_price:.3f}\n"
                 f"持仓: {status['current_position']}股 (底仓{status['base_position']}股)\n"
                 f"持仓成本: {status['position_cost']:.4f}\n"
-                f"已实现盈亏: {'+' if status['today_realized_pnl'] >= 0 else ''}{status['today_realized_pnl']:.2f} 元\n"
+                f"T0 盈利: {'+' if t0 >= 0 else ''}{t0:.2f} 元\n"
+                f"持仓盈亏: {'+' if position_pnl >= 0 else ''}{position_pnl:.2f} 元\n"
+                f"今日总盈亏: {'+' if total >= 0 else ''}{total:.2f} 元\n"
                 f"今日交易笔数: {len(records)}\n"
                 f"---\n{trades_text}"
             )
             self.notifier.send_text(message)
-            logger.info("[Final] 收盘报告已发送")
+            logger.info(f"[Final] 收盘报告已发送: T0={t0:.2f} | 持仓={position_pnl:.2f} | 合计={total:.2f}")
 
             # 打印复盘摘要
             self.trade_logger.print_day_summary()

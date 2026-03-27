@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from config import (
-    GRID_COUNT, SHARES_PER_GRID, INITIAL_BASE_SHARES, STOP_LOSS_PCT,
+    GRID_COUNT, SHARES_PER_GRID, STOP_LOSS_PCT, STOP_LOSS_ENABLED, INITIAL_BASE_SHARES,
     TRADING_MORNING_START, TRADING_MORNING_END,
     TRADING_AFTERNOON_START, TRADING_AFTERNOON_END,
 )
@@ -48,7 +48,7 @@ class GridEngine:
                  base_price: float,
                  grid_count: int = GRID_COUNT,
                  shares_per_grid: int = SHARES_PER_GRID,
-         
+                 stop_loss_pct: float = STOP_LOSS_PCT,
                  initial_base_shares: int = INITIAL_BASE_SHARES,
                  atr14: float = None,
                  boll_upper: float = None,
@@ -58,6 +58,7 @@ class GridEngine:
         self.base_price = base_price
         self.grid_count = grid_count
         self.shares_per_grid = shares_per_grid
+        self.stop_loss_pct = stop_loss_pct
         self.initial_base_shares = initial_base_shares
         self.atr14 = atr14
         self.boll_upper = boll_upper
@@ -70,6 +71,8 @@ class GridEngine:
         # 网格间距
         self.base_spacing = atr14 / grid_count if atr14 else base_price * 0.01
         self.last_grid_spacing = self.base_spacing
+        # 档位计算永远用固定base_spacing，保证网格档位与价格一一对应
+        self._level_spacing = self.base_spacing
 
         # 网格边界
         self.MAX_LEVEL = grid_count // 2   # = 5
@@ -95,6 +98,7 @@ class GridEngine:
         self.total_pnl = 0.0
 
         # 止损标记
+        self.stop_loss_enabled = STOP_LOSS_ENABLED
         self.stop_loss_triggered = False
 
         # 构建网格
@@ -102,8 +106,6 @@ class GridEngine:
 
         # 实时价格
         self.last_price: float = base_price
-        # 上次成交价格（用于控制最小价格变动门槛）
-        self.last_trade_price: float = base_price
 
         logger.info(f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
                     f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}, "
@@ -119,8 +121,17 @@ class GridEngine:
         return levels
 
     def update_grid_spacing(self, new_spacing: float):
-        """更新网格间距"""
+        """更新网格间距，同时重算当前档位避免跨档漂移"""
+        old_spacing = self.last_grid_spacing
         self.last_grid_spacing = new_spacing
+        if old_spacing != 0 and abs(new_spacing - old_spacing) > 0.0001:
+            # spacing变了，用新spacing重新计算当前档位
+            # 并重置peak/valley，避免用旧档位触发错误交易
+            new_level = self._price_to_level(self.last_price)
+            logger.info(f"[GridEngine] 间距 {old_spacing:.4f}→{new_spacing:.4f}, 档位重算: {self.current_level}→{new_level}")
+            self.current_level = new_level
+            self.peak_level = 0
+            self.valley_level = 0
 
     def update_price(self, current_price: float):
         self.last_price = current_price
@@ -143,9 +154,10 @@ class GridEngine:
         return cur_min >= (aft_e - 30)
 
     def _price_to_level(self, price: float) -> int:
-        if self.last_grid_spacing == 0:
+        # 永远用固定间距计算档位，保证网格档位和价格一一对应
+        if self._level_spacing == 0:
             return 0
-        return int(round((price - self.base_price) / self.last_grid_spacing))
+        return int(round((price - self.base_price) / self._level_spacing))
 
     def _record_trade(self, action, price, shares, grid_level, reason, current_time):
         """记录一笔交易"""
@@ -187,13 +199,18 @@ class GridEngine:
         avg_cost = self.position_cost
         current_level = self._price_to_level(current_price)
 
-        # 0. 最小价格变动门槛：两次交易之间价格变动必须 >= 一个网格间距
-        price_change = abs(current_price - self.last_trade_price)
-        if price_change < self.last_grid_spacing:
-            logger.debug(f"[GridEngine] 跳过：价格变动{price_change:.4f} < 间距{self.last_grid_spacing:.4f}")
-            return None, avg_cost
+        # 1. 止损检查
+        loss = (current_price - self.base_price) / self.base_price
+        if self.stop_loss_enabled and loss <= self.stop_loss_pct and not self.stop_loss_triggered:
+            self.stop_loss_triggered = True
+            record = self._record_trade(
+                "SELL", current_price, self.current_position,
+                0, f"止损触发, 亏损{loss*100:.2f}%, 清仓", current_time
+            )
+            logger.warning(f"[GridEngine] ⚠️ 止损触发! 价格={current_price}, 亏损={loss*100:.2f}%")
+            return record, avg_cost
 
-        # 1. 尾盘30分钟强制平仓（不受最小价格变动门槛约束）
+        # 2. 尾盘30分钟强制平仓
         if self._is_closing_window(current_time):
             diff = self.current_position - self.yesterday_position
             if diff > 0:
@@ -202,7 +219,6 @@ class GridEngine:
                     current_level,
                     f"尾盘强制平仓, 持仓{self.current_position}→{self.yesterday_position}", current_time
                 )
-                self.last_trade_price = current_price
                 logger.info(f"[GridEngine] 尾盘平仓: 卖{diff}股@{current_price}")
                 return record, avg_cost
             elif diff < 0:
@@ -211,7 +227,6 @@ class GridEngine:
                     current_level,
                     f"尾盘补回, 持仓{self.current_position}→{self.yesterday_position}", current_time
                 )
-                self.last_trade_price = current_price
                 logger.info(f"[GridEngine] 尾盘补仓: 买{-diff}股@{current_price}")
                 return record, avg_cost
             return None, avg_cost
@@ -229,54 +244,42 @@ class GridEngine:
             logger.info(f"[GridEngine] ⚠️ 价格超出网格下限(档位{current_level}<{self.MIN_LEVEL})，暂停交易，等待尾盘")
             return None, avg_cost
 
-        # 5. 正常网格交易
-        # 规则1：累计买<=底仓，累计卖<=底仓
-        # 规则2：每档有固定目标持仓 = 底仓 - 档位×每格股数
-        # 规则3：可交易量不够时，能买/卖多少是多少
-        # 附加约束：两次交易之间价格变动必须 >= 一个网格间距
+        # 5. 正常网格交易（价格在边界内）
+        # 每一格对应固定股数，持仓与目标持仓对齐
+        # 只有档位发生变化时才交易（防止同一档位重复触发）
+        if current_level == self.current_level:
+            return None, avg_cost
+
         target_position = self.base_position - current_level * self.shares_per_grid
-        trade_shares = abs(self.current_position - target_position)
+        trade_shares = self.current_position - target_position
 
         if trade_shares == 0:
             return None, avg_cost
 
-        if self.current_position > target_position:
-            # 持仓 > 目标 → 需要卖出
-            # 可卖额度 = 底仓 - 累计卖出
-            available = max(0, self.base_position - self.cumulative_sells)
-            actual = min(trade_shares, available)
-            if actual > 0:
+        if trade_shares > 0:
+            # 需要卖出（持仓多于目标）
+            # 可卖出 = 底仓 - 今日累计净卖出（买的不算！）
+            available_to_sell = max(0, self.base_position - self.cumulative_sells)
+            actual_sell = min(trade_shares, max(0, available_to_sell))
+            if actual_sell > 0:
                 pos_before = self.current_position
                 record = self._record_trade(
-                    "SELL", current_price, actual, current_level,
-                    f"网格@{current_price} 档={current_level} 持仓{pos_before}→{target_position}", current_time
+                    "SELL", current_price, actual_sell, current_level,
+                    f"网格交易@{current_price}, 档位={current_level}, 持仓{pos_before}→{target_position}", current_time
                 )
-                logger.info(f"[GridEngine] 卖出: {actual}股@{current_price} 档={current_level} 持仓{pos_before}→{self.current_position}")
-                self.last_trade_price = current_price
+                logger.info(f"[GridEngine] 网格卖出: {actual_sell}股@{current_price}, 档位={current_level}, 持仓{pos_before}→{self.current_position}")
                 self.current_level = current_level
                 return record, avg_cost
-            else:
-                logger.info(f"[GridEngine] 跳过卖出: 可卖额度=0（累计已卖{self.cumulative_sells}股）")
-                self.current_level = current_level
-                return None, avg_cost
         else:
-            # 持仓 < 目标 → 需要买入
-            # 可买额度 = 底仓 - 累计买入
-            available = max(0, self.base_position - self.cumulative_buys)
-            actual = min(trade_shares, available)
-            if actual > 0:
-                record = self._record_trade(
-                    "BUY", current_price, actual, current_level,
-                    f"网格@{current_price} 档={current_level} 持仓{self.current_position}→{target_position}", current_time
-                )
-                logger.info(f"[GridEngine] 买入: {actual}股@{current_price} 档={current_level} 持仓{self.current_position}→{self.current_position}")
-                self.last_trade_price = current_price
-                self.current_level = current_level
-                return record, avg_cost
-            else:
-                logger.info(f"[GridEngine] 跳过买入: 可买额度=0（累计已买{self.cumulative_buys}股）")
-                self.current_level = current_level
-                return None, avg_cost
+            # 需要买入（持仓少于目标）
+            buy_shares = -trade_shares
+            record = self._record_trade(
+                "BUY", current_price, buy_shares, current_level,
+                f"网格交易@{current_price}, 档位={current_level}, 持仓{self.current_position}→{target_position}", current_time
+            )
+            logger.info(f"[GridEngine] 网格买入: {buy_shares}股@{current_price}, 档位={current_level}, 持仓{self.current_position - buy_shares}→{self.current_position}")
+            self.current_level = current_level
+            return record, avg_cost
 
         return None, avg_cost
 
@@ -328,13 +331,13 @@ class GridEngine:
             'boll_upper': self.boll_upper,
             'boll_middle': self.boll_middle,
             'boll_lower': self.boll_lower,
+            'stop_loss_triggered': self.stop_loss_triggered,
             'grid_count': self.grid_count,
             'base_spacing': self.base_spacing,
             'current_spacing': self.last_grid_spacing,
             'current_level': self._price_to_level(self.last_price),
             'max_level': self.MAX_LEVEL,
             'min_level': self.MIN_LEVEL,
-            'stop_loss_triggered': self.stop_loss_triggered,
         }
 
     def get_trade_records(self) -> List[dict]:
@@ -358,9 +361,8 @@ class GridEngine:
         self.today_realized_pnl = 0.0
         self.realized_pnl = 0.0
         self.trade_records = []
+        self.stop_loss_triggered = False
         self.cumulative_sells = 0
         self.cumulative_buys = 0
         self.current_level = 0
-        self.last_trade_price = self.base_price
-        self.stop_loss_triggered = False
         logger.info("[GridEngine] 日内重置完成")

@@ -31,6 +31,7 @@ POSITION_CSV_HEADER = [
     "float_pnl", "realized_pnl", "available_t0_shares",
     "atr14", "boll_upper", "boll_middle", "boll_lower",
     "grid_spacing", "grid_level", "base_price",
+    "today_t0", "today_position_pnl", "today_total_pnl",
 ]
 
 
@@ -62,10 +63,10 @@ class PositionSnapshot:
     stock_name: str
     current_price: float
     position_shares: int
-    position_cost: float      # 持仓成本（参考）
-    float_pnl: float          # 浮动盈亏
-    realized_pnl: float       # 已实现盈亏
-    available_t0_shares: int # 可用于T+0的股数
+    position_cost: float       # 持仓成本（参考）
+    float_pnl: float           # 浮动盈亏（≈持仓盈亏）
+    realized_pnl: float        # 已实现盈亏（旧口径，毛）
+    available_t0_shares: int  # 可用于T+0的股数
     atr14: float
     boll_upper: float
     boll_middle: float
@@ -73,6 +74,10 @@ class PositionSnapshot:
     grid_spacing: float
     grid_level: int
     base_price: float
+    # 今日盈亏三因子（新口径，2026-03-27）
+    today_t0: float = 0.0          # T0 盈利 = Σ卖出金额 - Σ买入金额
+    today_position_pnl: float = 0.0  # 持仓盈亏 = (当前价 - 基准价) × 昨日持仓
+    today_total_pnl: float = 0.0      # 今日总盈亏 = T0 + 持仓盈亏
 
 
 class TradeLogger:
@@ -239,7 +244,10 @@ class TradeLogger:
                               boll_lower: float,
                               grid_spacing: float,
                               grid_level: int,
-                              base_price: float) -> PositionSnapshot:
+                              base_price: float,
+                              today_t0: float = 0.0,
+                              today_position_pnl: float = 0.0,
+                              today_total_pnl: float = 0.0) -> PositionSnapshot:
         """
         记录一个持仓快照到 positions.csv
         每次网格交易后自动调用；每隔30分钟 mainloop 也会主动调用
@@ -269,6 +277,9 @@ class TradeLogger:
             grid_spacing=grid_spacing,
             grid_level=grid_level,
             base_price=base_price,
+            today_t0=today_t0,
+            today_position_pnl=today_position_pnl,
+            today_total_pnl=today_total_pnl,
         )
 
         with open(self.positions_csv, "a", newline="", encoding="utf-8") as f:
@@ -290,6 +301,9 @@ class TradeLogger:
                 f"{snapshot.grid_spacing:.4f}",
                 snapshot.grid_level,
                 f"{snapshot.base_price:.4f}",
+                f"{snapshot.today_t0:.2f}",
+                f"{snapshot.today_position_pnl:.2f}",
+                f"{snapshot.today_total_pnl:.2f}",
             ])
 
         return snapshot
@@ -405,6 +419,9 @@ class TradeLogger:
                         grid_spacing=float(row["grid_spacing"]),
                         grid_level=int(row["grid_level"]),
                         base_price=float(row["base_price"]),
+                        today_t0=float(row.get("today_t0", 0.0)),
+                        today_position_pnl=float(row.get("today_position_pnl", 0.0)),
+                        today_total_pnl=float(row.get("today_total_pnl", 0.0)),
                     ))
         except Exception as e:
             logger.error(f"[TradeLogger] 读取 positions.csv 失败: {e}")
