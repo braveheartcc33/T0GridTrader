@@ -10,7 +10,8 @@ STOCK_NAME = "港股创新药"
 
 # ==================== 网格参数 ====================
 GRID_COUNT = 10           # 网格档位数量
-STOP_LOSS_PCT = -0.02     # 止损幅度 -2%
+STOP_LOSS_ENABLED = False  # 是否启用止损（True=启用，False=关闭）
+STOP_LOSS_PCT = -0.02     # 止损幅度 -2%（止损启用时生效）
 INITIAL_BASE_SHARES = 10000   # 初始底仓股数（T+0需要先有底仓）
 
 # 每格股数（固定，根据资金管理计算）

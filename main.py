@@ -83,6 +83,9 @@ class GridTraderApp:
         # 今日买卖累计金额（用于计算 T0 盈利）
         self._today_sell_amount = 0.0
         self._today_buy_amount = 0.0
+        # 今日买卖累计股数（用于计算持仓缺口市值）
+        self._today_sell_shares = 0
+        self._today_buy_shares = 0
 
         # 状态汇报计时
         self.last_status_time = datetime.now()
@@ -307,13 +310,17 @@ class GridTraderApp:
 
     def _calc_today_pnl(self, current_price: float) -> tuple:
         """
-        计算今日盈亏三因子
+        计算今日盈亏三因子（含持仓缺口市值估算）
         Returns: (t0_profit, position_pnl, total_pnl)
-          - t0_profit      = Σ卖出金额 - Σ买入金额
-          - position_pnl    = (当前价 - 基准价) × 昨日持仓
-          - total_pnl      = t0_profit + position_pnl
+          - t0_profit = Σ卖出金额 - Σ买入金额 + 净持仓缺口 × 当前价
+                        （净持仓缺口 = 今日卖出股数 - 今日买入股数，正=净空头，负=净多头）
+          - position_pnl = (当前价 - 基准价) × 昨日持仓
+          - total_pnl = t0_profit + position_pnl
         """
-        t0 = self._today_sell_amount - self._today_buy_amount
+        # 净持仓缺口：正=净空（卖了没买回来），负=净多（买了没卖完）
+        net_shares = self._today_sell_shares - self._today_buy_shares
+        # 净空头（正）：卖出没买回来，按当前价补足市值；净多头（负）：买入没卖出去，按当前价估算市值
+        t0 = self._today_sell_amount - self._today_buy_amount - net_shares * current_price
         base_price = self.engine.base_price
         yesterday_pos = self.engine.yesterday_position
         position_pnl = (current_price - base_price) * yesterday_pos
@@ -327,6 +334,7 @@ class GridTraderApp:
         # 累计今日买卖金额（用于计算 T0 盈利）
         if record.action == "SELL":
             self._today_sell_amount += record.price * record.shares
+            self._today_sell_shares += record.shares
             gross = record.price * record.shares
             commission = max(gross * 0.0003, 5.0)
             stamp_tax = gross * 0.001
@@ -334,6 +342,7 @@ class GridTraderApp:
             self._cumulative_net_pnl += trade_net_pnl
         else:
             self._today_buy_amount += record.price * record.shares
+            self._today_buy_shares += record.shares
 
         entry = self.trade_logger.log_trade(
             stock_code=self.STOCK_CODE,
