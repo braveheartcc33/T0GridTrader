@@ -39,7 +39,8 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-from config import STOCK_CODE, STOCK_NAME
+from config import STOCK_CODE, STOCK_NAME, STOCKS, MULTI_STOCK_MODE
+
 
 class GridTraderApp:
     """
@@ -491,8 +492,8 @@ class GridTraderApp:
             logger.error(f"[Final] 收盘报告发送失败: {e}")
 
 
-def main():
-    """入口"""
+def main_single():
+    """单股票模式入口"""
     logger.info("=" * 60)
     logger.info("  A股网格交易系统 - 明日开盘启动")
     logger.info(f"  股票: {STOCK_CODE}")
@@ -514,6 +515,37 @@ def main():
     except Exception as e:
         logger.exception(f"[Fatal] 系统启动失败: {e}")
         print(f"\n❌ 系统启动失败: {e}")
+
+
+def main_multi():
+    """多股票模式入口"""
+    from multi_engine import GridTraderMulti
+    
+    logger.info("=" * 60)
+    logger.info("  多股票网格交易系统")
+    logger.info(f"  股票列表: {[s['code'] for s in STOCKS]}")
+    logger.info(f"  日期: {__import__('datetime').date.today().strftime('%Y-%m-%d')}")
+    logger.info("=" * 60)
+    
+    multi = GridTraderMulti()
+    
+    try:
+        multi.run()
+    except Exception as e:
+        logger.exception(f"[Fatal] 多股票系统异常: {e}")
+        print(f"\n❌ 多股票系统异常: {e}")
+
+
+def main():
+    """主入口 - 自动选择模式"""
+    if MULTI_STOCK_MODE and len(STOCKS) > 1:
+        # 多股票模式
+        logger.info("[Main] 启动多股票模式")
+        main_multi()
+    else:
+        # 单股票模式
+        logger.info("[Main] 启动单股票模式")
+        main_single()
 
 
 if __name__ == "__main__":
