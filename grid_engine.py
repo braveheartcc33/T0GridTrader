@@ -48,9 +48,9 @@ class GridEngine:
                  base_price: float,
                  grid_count: int = GRID_COUNT,
                  shares_per_grid: int = SHARES_PER_GRID,
-         
                  initial_base_shares: int = INITIAL_BASE_SHARES,
                  atr14: float = None,
+                 atr_spacing: float = 4.0,          # ATR倍数，每格间距 = ATR × atr_spacing
                  boll_upper: float = None,
                  boll_lower: float = None,
                  boll_middle: float = None,
@@ -60,15 +60,16 @@ class GridEngine:
         self.shares_per_grid = shares_per_grid
         self.initial_base_shares = initial_base_shares
         self.atr14 = atr14
+        self.atr_spacing = atr_spacing
         self.boll_upper = boll_upper
         self.boll_lower = boll_lower
         self.boll_middle = boll_middle
 
-        # 昨日收盘持仓（强制平仓目标）
+        # 昨日收盘持仓（强制平仓目标），默认为初始底仓
         self.yesterday_position = yesterday_close_position or initial_base_shares
 
-        # 网格间距
-        self.base_spacing = atr14 / grid_count if atr14 else base_price * 0.01
+        # 网格间距 = ATR × ATR倍数
+        self.base_spacing = atr14 * atr_spacing if atr14 else base_price * 0.01
         self.last_grid_spacing = self.base_spacing
 
         # 网格边界
@@ -106,7 +107,7 @@ class GridEngine:
         self.last_trade_price: float = base_price
 
         logger.info(f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
-                    f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}, "
+                    f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}(ATR×{self.atr_spacing}), "
                     f"网格边界={self.MIN_LEVEL}~{self.MAX_LEVEL}")
 
     def _build_grid(self) -> List[dict]:

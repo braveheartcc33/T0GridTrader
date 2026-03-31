@@ -154,6 +154,7 @@ class GridTraderApp:
 
     def initialize(self):
         """系统初始化：从 tushare 加载历史数据，启动引擎"""
+        from config import INITIAL_BASE_SHARES, STOCKS
         logger.info("[Init] 开始初始化市场数据...")
 
         indicators = self.market_mgr.initialize()
@@ -167,14 +168,16 @@ class GridTraderApp:
         self.engine = self.GridEngineCls(
             base_price=base_price,
             atr14=indicators['atr14'],
+            atr_spacing=STOCKS[0].get('atr_spacing', 4.0),
             boll_upper=indicators['boll_upper'],
             boll_lower=indicators['boll_lower'],
             boll_middle=indicators['boll_middle'],
-            yesterday_close_position=indicators.get('last_close_position', 10000),
+            initial_base_shares=INITIAL_BASE_SHARES,
+            yesterday_close_position=indicators.get('last_close_position', INITIAL_BASE_SHARES),
         )
 
         # 发送初始化报告
-        spacing = indicators['atr14'] / self.engine.grid_count
+        spacing = indicators['atr14'] * self.engine.atr_spacing
         self.notifier.send_init_report(indicators, base_price,
                                         self.engine.grid_count, spacing)
 
