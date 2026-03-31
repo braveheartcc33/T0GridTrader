@@ -302,3 +302,116 @@ T0GridTrader/
 ---
 
 *本系统仅供学习研究，不构成投资建议。*
+
+---
+
+## 系统架构
+
+### 程序入口
+
+```
+python3 main.py          ← 唯一起入口
+```
+
+`main.py` 自动判断：
+- `MULTI_STOCK_MODE = True` → `main_multi()` 多股票模式
+- `MULTI_STOCK_MODE = False` → `main_single()` 单股票模式
+
+---
+
+### 执行流程图
+
+```
+main.py
+│
+├── main_single() / main_multi()
+│   │
+│   ├── GridTraderApp.initialize()
+│   │   │
+│   │   ├── MarketDataManager.initialize()
+│   │   │   └── tushare API → 前复权数据
+│   │   │       ├── ATR(14)
+│   │   │       └── 布林带(20)
+│   │   │
+│   │   └── GridEngine(base_price, atr14, atr_spacing, ...)
+│   │       └── 读取 state_{code}.json 恢复持仓
+│   │
+│   └── GridTraderApp.run()  ← 主循环（轮询价格）
+│       │
+│       └── while True:
+│           ├── fetch_current_price()         ← 腾讯财经API
+│           │
+│           ├── check_grid_signals(price)     ← 【核心条件判断】
+│           │   │
+│           │   ├── GridEngine.can_buy()      ← 能否买入
+│           │   │   ├── ① 价格在布林下轨附近？
+│           │   │   ├── ② 今日累计买入量 ≤ base_position？
+│           │   │   └── ③ 买卖价差 ≥ base_spacing？
+│           │   │
+│           │   ├── GridEngine.can_sell()     ← 能否卖出
+│           │   │   ├── ① 价格在布林上轨附近？
+│           │   │   ├── ② 今日累计卖出量 ≤ base_position？
+│           │   │   └── ③ 买卖价差 ≥ base_spacing？
+│           │   │
+│           │   └── GridEngine.evaluate_position() ← 持仓盈亏计算
+│           │
+│           ├── send_trade_signal()          ← 飞书推送
+│           │
+│           └── sleep(POLL_INTERVAL_SEC)       ← 等待下次轮询
+│
+└── 每日收盘时
+    └── GridEngine.reset_day()             ← 重置买入/卖出计数
+```
+
+---
+
+### 核心条件判断函数详解
+
+#### GridEngine.can_buy(price) — 能否买入
+
+| 条件 | 说明 |
+|------|------|
+| 价格触及下轨 | 买入档位触发 |
+| 今日买入量 ≤ 底仓 | 防止超买 |
+| 买卖价差 ≥ 间距 | 防止网格内对倒 |
+
+#### GridEngine.can_sell(price) — 能否卖出
+
+| 条件 | 说明 |
+|------|------|
+| 价格触及上轨 | 卖出档位触发 |
+| 今日卖出量 ≤ 底仓 | 防止超卖 |
+| 买卖价差 ≥ 间距 | 防止网格内对倒 |
+
+---
+
+### 模块职责
+
+| 文件 | 职责 |
+|------|------|
+| `main.py` | 主入口 + 主循环调度 |
+| `config.py` | 参数配置（STOCKS 列表） |
+| `grid_engine.py` | 网格核心算法 + 条件判断 |
+| `market_data.py` | 数据获取（前复权 + ATR + 布林带） |
+| `notifier.py` | 飞书通知推送 |
+| `trade_logger.py` | 交易记录 + state 文件读写 |
+| `backtest_grid.py` | 多周期回测 |
+| `state_{code}.json` | 每日运行状态 |
+
+---
+
+### T+0 规则（三重保护）
+
+```
+第①重：价格条件
+  买 → 价格 ≤ 布林下轨 + 档位修正
+  卖 → 价格 ≥ 布林上轨 + 档位修正
+
+第②重：T+0 数量限制
+  每日累计买入量 ≤ base_position（昨仓）
+  每日累计卖出量 ≤ base_position（昨仓）
+
+第③重：买卖价差保护
+  买完再卖：本次买价 - 上次卖价 ≥ 每格间距
+  卖完再买：本次卖价 - 上次买价 ≥ 每格间距
+```
