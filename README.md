@@ -415,3 +415,100 @@ main.py
   买完再卖：本次买价 - 上次卖价 ≥ 每格间距
   卖完再买：本次卖价 - 上次买价 ≥ 每格间距
 ```
+
+---
+
+## 系统架构
+
+### 程序入口
+
+```bash
+python3 main.py
+```
+
+`main.py` 自动判断运行模式：
+- `MULTI_STOCK_MODE = False` → `main_single()` 单股票模式
+- `MULTI_STOCK_MODE = True` → `main_multi()` 多股票模式
+
+---
+
+### 单股票模式执行流程
+
+```
+main_single()
+│
+├── GridTraderApp.initialize()
+│   │
+│   ├── MarketDataManager.initialize()
+│   │   └── tushare API
+│   │       ├── 前复权日线数据（计算ATR、布林带）
+│   │       ├── ATR(14) → 用于计算网格间距 = ATR × atr_spacing
+│   │       └── 布林带(20) → 用于显示参考
+│   │
+│   ├── GridEngine(base_price, atr14, atr_spacing, ...)
+│   │   ├── base_price = 昨日收盘（前复权）
+│   │   ├── base_spacing = ATR × atr_spacing
+│   │   ├── grid_count 档（两侧对称，如10档 = -5到+5）
+│   │   └── base_position = 初始底仓股数
+│   │
+│   └── GridNotifier()
+│
+└── GridTraderApp.run()
+    │
+    └── while True:
+        ├── fetch_current_price()        ← 腾讯财经实时API
+        │
+        ├── check_grid_signals(price)    ← 【核心判断】
+        │
+        └── sleep(POLL_INTERVAL_SEC)    ← 等待下次轮询
+```
+
+---
+
+### 网格档位原理（核心）
+
+网格将价格分成若干档，每档间距 = `base_spacing`：
+
+```
+档位 -5    档位 -4    档位 -3    档位 -2    档位 -1    档位 0(基准)    档位 +1    档位 +2    ...
+价格 0.485    0.593     0.700     0.808     0.915     1.022(基准)    1.129    1.236
+                                                         ↑
+                                                      基准价
+```
+
+基准价 = 昨收，间距 = ATR × atr_spacing（如 0.0269 × 4.0 = 0.1076）
+
+---
+
+### 核心条件判断（grid_engine.py）
+
+#### can_buy(price) — 能否买入
+
+| 条件 | 说明 |
+|------|------|
+| 价格跌破一档 | 当前价 < 上一档价格（价格下跌一格） |
+| 今日累计买入量 ≤ 昨仓 | T+0 数量限制 |
+| 买价 - 上次卖价 ≥ 间距 | 买卖价差保护 |
+
+#### can_sell(price) — 能否卖出
+
+| 条件 | 说明 |
+|------|------|
+| 价格涨超一档 | 当前价 > 下一档价格（价格上涨一格） |
+| 今日累计卖出量 ≤ 昨仓 | T+0 数量限制 |
+| 上次买价 - 卖价 ≥ 间距 | 买卖价差保护 |
+
+---
+
+### 模块职责
+
+| 文件 | 职责 |
+|------|------|
+| `main.py` | 主入口 + 主循环调度 |
+| `config.py` | 参数配置（STOCKS 列表） |
+| `grid_engine.py` | 网格核心算法 + 条件判断 |
+| `market_data.py` | tushare 数据（前复权 + ATR + 布林） |
+| `notifier.py` | 飞书通知推送 |
+| `trade_logger.py` | 交易记录 + 状态文件 |
+| `backtest_grid.py` | 多周期回测 |
+| `multi_engine.py` | 多股票管理器 |
