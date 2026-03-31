@@ -34,9 +34,13 @@ class GridNotifier:
 
     def __init__(self,
                  webhook_url: Optional[str] = None,
-                 signing_key: Optional[str] = None):
+                 signing_key: Optional[str] = None,
+                 stock_code: str = None,
+                 stock_name: str = None):
         self.webhook_url = webhook_url or FEISHU_WEBHOOK_URL
         self.signing_key = signing_key or FEISHU_SIGNING_KEY
+        self.stock_code = stock_code
+        self.stock_name = stock_name
         self.enabled = not self.webhook_url.startswith("https://open.feishu.cn")
 
     def _sign_payload(self, payload: dict) -> dict:
@@ -113,10 +117,11 @@ class GridNotifier:
         }
         title = title_map.get(signal_type, "通知")
 
+        stock_display = f"{self.stock_code} {self.stock_name}" if self.stock_name else (self.stock_code or STOCK_CODE)
         message_parts = [
             f"{emoji} **{title}**",
             f"时间: {datetime.now().strftime('%H:%M:%S')}",
-            f"股票: {STOCK_CODE}",
+            f"股票: {stock_display}",
             f"触发价格: {price:.3f}",
             f"网格档位: 第 {grid_level} 档（共{total_levels}档）",
             f"ATR(14): {atr14:.4f} | 间距: {grid_spacing:.4f} (x{spacing_multiplier:.1f})",
@@ -150,10 +155,11 @@ class GridNotifier:
         """
         position_type = "加仓中" if position > base_position else ("减仓中" if position < base_position else "仅底仓")
 
+        stock_display = f"{self.stock_code} {self.stock_name}" if self.stock_name else (self.stock_code or STOCK_CODE)
         message = (
             f"📊 **网格交易状态汇报**\n"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"股票: {STOCK_CODE}\n"
+            f"股票: {stock_display}\n"
             f"当前价格: {current_price:.3f}\n"
             f"持仓状态: {position_type}（{position}股 / 底仓{base_position}股）\n"
             f"T0 盈利: {'+' if today_t0 >= 0 else ''}{today_t0:.2f} 元\n"
@@ -192,10 +198,11 @@ class GridNotifier:
     def send_init_report(self, indicators: dict, base_price: float,
                          grid_count: int, spacing: float) -> bool:
         """发送系统初始化报告"""
+        stock_display = f"{self.stock_code} {self.stock_name}" if self.stock_name else (self.stock_code or STOCK_CODE)
         message = (
             f"🚀 **网格交易系统启动**\n"
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"股票: {STOCK_CODE}\n"
+            f"股票: {stock_display}\n"
             f"基准价: {base_price:.3f}\n"
             f"网格数量: {grid_count} 档\n"
             f"每格间距(ATR): {spacing:.4f}\n"

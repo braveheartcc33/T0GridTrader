@@ -88,15 +88,18 @@ class TradeLogger:
     - state.json    完整状态，用于崩溃恢复
     """
 
-    def __init__(self, data_dir: str = None):
+    def __init__(self, data_dir: str = None, stock_code: str = None):
         if data_dir is None:
             data_dir = os.path.dirname(os.path.abspath(__file__))
         self.data_dir = data_dir
+        self.stock_code = stock_code
         self.today_str = date.today().strftime("%Y%m%d")
 
-        self.trades_csv = os.path.join(data_dir, f"trades_{self.today_str}.csv")
-        self.positions_csv = os.path.join(data_dir, f"positions_{self.today_str}.csv")
-        self.state_json = os.path.join(data_dir, "state.json")
+        # 文件名支持股票代码后缀
+        code_suffix = f"_{stock_code}" if stock_code else ""
+        self.trades_csv = os.path.join(data_dir, f"trades{code_suffix}_{self.today_str}.csv")
+        self.positions_csv = os.path.join(data_dir, f"positions{code_suffix}_{self.today_str}.csv")
+        self.state_json = os.path.join(data_dir, f"state{code_suffix}.json")
 
         # 今日交易计数器
         self.trade_count = self._load_trade_count()

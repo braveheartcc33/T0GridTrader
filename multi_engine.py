@@ -113,6 +113,7 @@ class GridTraderUnit:
             shares_per_grid=self.config['shares_per_grid'],
             base_shares=self.config['base_shares'],
             stop_loss_enabled=self.config['stop_loss_enabled'],
+            atr_spacing=self.config.get('atr_spacing', 4.0),
         )
         
         # 发送初始化报告
