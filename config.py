@@ -12,11 +12,11 @@ STOCK_NAME = "港股创新药"
 GRID_COUNT = 10           # 网格档位数量
 STOP_LOSS_ENABLED = False  # 是否启用止损（True=启用，False=关闭）
 STOP_LOSS_PCT = -0.02     # 止损幅度 -2%（止损启用时生效）
-INITIAL_BASE_SHARES = 10000   # 初始底仓股数（T+0需要先有底仓）
+INITIAL_BASE_SHARES = 100000  # 初始底仓股数（T+0需要先有底仓）
 
 # 每格股数（固定，根据资金管理计算）
 # 每次网格触发买卖的股数
-SHARES_PER_GRID = 1000    # 每格1000股
+SHARES_PER_GRID = 10000   # 每格10000股
 
 # 基准价：开盘价（或昨日收盘价），系统启动时自动设置
 BASE_PRICE = None         # 运行时设置

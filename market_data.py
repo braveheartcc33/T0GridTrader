@@ -193,14 +193,15 @@ def build_indicators(df: pd.DataFrame) -> dict:
     atr_series = calc_atr(df, period=ATR_PERIOD)
     sma, upper, lower = calc_bollinger_bands(df, period=BOLL_PERIOD)
 
+    # tushare K线数据按日期升序排列：iloc[0]=最老日期，iloc[-1]=最新日期
     result = {
         'atr14': float(atr_series.iloc[-1]),
         'boll_upper': float(upper.iloc[-1]),
         'boll_middle': float(sma.iloc[-1]),
         'boll_lower': float(lower.iloc[-1]),
-        'last_close': float(df['close'].iloc[-1]),
-        'open_price': float(df['open'].iloc[-1]),
-        'prev_close': float(df['close'].iloc[-2]) if len(df) >= 2 else None,
+        'last_close': float(df['close'].iloc[-1]),    # 最新K线收盘
+        'open_price': float(df['open'].iloc[-1]),     # 最新K线开盘
+        'prev_close': float(df['close'].iloc[-2]) if len(df) >= 2 else None,  # 次新K线收盘
         'trade_date': str(df['trade_date'].iloc[-1]),
     }
     return result

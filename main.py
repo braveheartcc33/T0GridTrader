@@ -157,10 +157,8 @@ class GridTraderApp:
 
         indicators = self.market_mgr.initialize()
 
-        base_price = self.market_mgr._today_open
-        if base_price is None:
-            base_price = indicators['last_close']
-            logger.info(f"[Init] 无今日开盘价，使用昨日收盘价: {base_price}")
+        base_price = indicators['last_close']
+        logger.info(f"[Init] 使用最近收盘价作为基准价: {base_price}")
 
         logger.info(f"[Init] 基准价: {base_price}, ATR(14): {indicators['atr14']:.4f}")
         logger.info(f"[Init] 布林带: {indicators['boll_lower']:.4f} ~ {indicators['boll_upper']:.4f}")
