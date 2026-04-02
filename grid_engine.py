@@ -52,7 +52,8 @@ class GridEngine:
                  atr14: float = None,
                  atr_spacing: float = 4.0,          # ATR倍数，每格间距 = ATR × atr_spacing
                  hist_vol: float = None,             # 历史波动率
-                                  use_hist_vol: bool = False,        # 是否使用历史波动率
+                 hist_vol_mult: float = 0.5,         # 【档位密度系数】每格 = hist_vol × mult；0.5=0.5σ/格
+                 use_hist_vol: bool = False,          # 是否使用历史波动率
                  boll_upper: float = None,
                  boll_lower: float = None,
                  boll_middle: float = None,
@@ -64,7 +65,7 @@ class GridEngine:
         self.atr14 = atr14
         self.atr_spacing = atr_spacing
         self.hist_vol = hist_vol
-        
+        self.hist_vol_mult = hist_vol_mult
         self.use_hist_vol = use_hist_vol
         self.boll_upper = boll_upper
         self.boll_lower = boll_lower
@@ -75,8 +76,9 @@ class GridEngine:
 
         # 网格间距计算
         if use_hist_vol and hist_vol and hist_vol > 0:
-            # 历史波动率方式：价格 × 历史波动率（直接）
-            self.base_spacing = base_price * hist_vol
+            # 历史波动率方式：价格 × 历史波动率 × 档位密度系数
+            # 档位定义：level±1 = ±0.5σ, level±2 = ±1.0σ, level±3 = ±1.5σ ...
+            self.base_spacing = base_price * hist_vol * hist_vol_mult
         else:
             # ATR方式：ATR × 倍数
             self.base_spacing = atr14 * atr_spacing if atr14 else base_price * 0.01
@@ -117,7 +119,7 @@ class GridEngine:
         self.last_trade_price: float = base_price
 
         logger.info(f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
-                    f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}({'历史波动率' if (hasattr(self,'use_hist_vol') and self.use_hist_vol and self.hist_vol) else 'ATR×'+str(self.atr_spacing)}), "
+                    f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}({'历史波动率×'+str(round(self.hist_vol_mult,1)) if (hasattr(self,'use_hist_vol') and self.use_hist_vol and self.hist_vol) else 'ATR×'+str(self.atr_spacing)}), "
                     f"网格边界={self.MIN_LEVEL}~{self.MAX_LEVEL}")
 
     def _build_grid(self) -> List[dict]:

@@ -170,6 +170,7 @@ class GridTraderApp:
             atr14=indicators['atr14'],
             atr_spacing=STOCKS[0].get('atr_spacing', 4.0),
             hist_vol=indicators.get('hist_vol'),
+            hist_vol_mult=0.5,  # 每格=0.5σ，即档位在±0.5σ/±1σ/±1.5σ...
             
             use_hist_vol=USE_HIST_VOL,
             boll_upper=indicators['boll_upper'],
