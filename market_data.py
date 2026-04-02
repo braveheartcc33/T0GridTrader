@@ -19,9 +19,11 @@ import tushare as ts
 from config import (
     TUSHARE_TOKEN, TENGXUN_REALTIME_URL,
     STOCK_CODE, BOLL_PERIOD, ATR_PERIOD,
-    GRID_COUNT, BASE_MULTIPLIER, GRID_SPACING_RULES
+    GRID_COUNT, HISTORICAL_VOLATILITY_PERIOD, VOLATILITY_MULTIPLIER,
+    TRADING_MORNING_START, TRADING_MORNING_END,
+    TRADING_AFTERNOON_START, TRADING_AFTERNOON_END,
 )
-from indicators import calc_atr, calc_bollinger_bands
+from indicators import calc_atr, calc_bollinger_bands, calc_historical_volatility, calc_historical_volatility
 
 logger = logging.getLogger(__name__)
 
@@ -192,10 +194,12 @@ def build_indicators(df: pd.DataFrame) -> dict:
 
     atr_series = calc_atr(df, period=ATR_PERIOD)
     sma, upper, lower = calc_bollinger_bands(df, period=BOLL_PERIOD)
+    hist_vol = calc_historical_volatility(df, period=HISTORICAL_VOLATILITY_PERIOD)
 
     # tushare K线数据按日期升序排列：iloc[0]=最老日期，iloc[-1]=最新日期
     result = {
         'atr14': float(atr_series.iloc[-1]),
+        'hist_volatility': hist_vol,
         'boll_upper': float(upper.iloc[-1]),
         'boll_middle': float(sma.iloc[-1]),
         'boll_lower': float(lower.iloc[-1]),
@@ -291,50 +295,53 @@ class MarketDataManager:
         return self.indicators or {}
 
     def get_grid_spacing_with_multiplier(self, current_time: datetime = None) -> tuple:
-        """返回 (spacing, multiplier)"""
-        if current_time is None:
-            current_time = datetime.now()
-        base_spacing = self.indicators['atr14'] / GRID_COUNT
-        cur_min = current_time.hour * 60 + current_time.minute
-        multiplier = BASE_MULTIPLIER
-        for (hour, minute), rule_mult in sorted(GRID_SPACING_RULES, reverse=True):
-            if cur_min >= hour * 60 + minute:
-                multiplier = rule_mult
-                break
-        return base_spacing * multiplier, multiplier
+        """
+        返回 (spacing, multiplier)
+        
+        全天固定间距，不再根据时段切换
+        """
+        from config import USE_HIST_VOL, HIST_VOL_MULTIPLIER
+        
+        if USE_HIST_VOL:
+            hist_vol = self.indicators.get('hist_vol', 0)
+            last_close = self.indicators['last_close']
+            spacing = last_close * hist_vol * HIST_VOL_MULTIPLIER
+            return spacing, HIST_VOL_MULTIPLIER
+        else:
+            base_spacing = self.indicators['atr14'] / GRID_COUNT
+            return base_spacing * BASE_MULTIPLIER, BASE_MULTIPLIER
 
     def get_grid_spacing(self, current_time: datetime = None) -> float:
         """
-        根据当前时间计算动态网格间距
-
-        从 GRID_SPACING_RULES 读取配置，根据当前时间匹配最近的规则时段。
-        规则是"从该时间点开始使用该倍数"，例如 ((9,30), 1.75) 表示 09:30 之后用 1.75，
-        直到下一个时间点。
+        计算网格间距（全天固定，不再盘中切换）
+        
+        如果 USE_HIST_VOL = True：使用历史波动率 × HIST_VOL_MULTIPLIER
+        否则：使用 ATR / GRID_COUNT × BASE_MULTIPLIER（传统方式，但不再时段切换）
 
         Args:
-            current_time: datetime（默认 now）
+            current_time: datetime（默认 now），仅用于兼容性
 
         Returns:
             每格价格间距
         """
-        from config import GRID_SPACING_RULES, BASE_MULTIPLIER, GRID_COUNT
+        from config import GRID_COUNT, USE_HIST_VOL, HIST_VOL_MULTIPLIER, BASE_MULTIPLIER
 
-        if current_time is None:
-            current_time = datetime.now()
-
-        cur_min = current_time.hour * 60 + current_time.minute
-
-        base_spacing = self.indicators['atr14'] / GRID_COUNT
-
-        # 找到当前时间所属的规则时段
-        # 规则按时间升序排列，找到最后一个 (hour, minute) <= cur_min 的规则
-        multiplier = BASE_MULTIPLIER  # 默认倍数
-        for (rule_hour, rule_minute), rule_mult in GRID_SPACING_RULES:
-            rule_total_min = rule_hour * 60 + rule_minute
-            if cur_min >= rule_total_min:
-                multiplier = rule_mult
-
-        return base_spacing * multiplier
+        if USE_HIST_VOL:
+            # 使用历史波动率：历史波动率 × 倍数 = 每格间距
+            hist_vol = self.indicators.get('hist_vol', 0)
+            if hist_vol is None or hist_vol == 0:
+                logger.warning("[MarketDataManager] 历史波动率为0，回退到ATR")
+                base_spacing = self.indicators['atr14'] / GRID_COUNT
+                return base_spacing * BASE_MULTIPLIER
+            # 历史波动率是百分比形式，直接乘以价格得到价格波动
+            last_close = self.indicators['last_close']
+            spacing = last_close * hist_vol * HIST_VOL_MULTIPLIER
+            logger.info(f"[MarketDataManager] 网格间距(历史波动率): {spacing:.4f} = 价格{last_close} × 波幅{hist_vol:.4f} × {HIST_VOL_MULTIPLIER}")
+            return spacing
+        else:
+            # 使用 ATR（传统方式，不切换）
+            base_spacing = self.indicators['atr14'] / GRID_COUNT
+            return base_spacing * BASE_MULTIPLIER
 
     def _is_trading_time(self, dt: datetime = None) -> bool:
         """判断是否在交易时段"""

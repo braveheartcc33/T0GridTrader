@@ -39,7 +39,7 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-from config import STOCK_CODE, STOCK_NAME, STOCKS, MULTI_STOCK_MODE
+from config import STOCK_CODE, STOCK_NAME, STOCKS, MULTI_STOCK_MODE, USE_HIST_VOL, HIST_VOL_MULTIPLIER
 
 
 class GridTraderApp:
@@ -169,6 +169,9 @@ class GridTraderApp:
             base_price=base_price,
             atr14=indicators['atr14'],
             atr_spacing=STOCKS[0].get('atr_spacing', 4.0),
+            hist_vol=indicators.get('hist_vol'),
+            hist_vol_mult=HIST_VOL_MULTIPLIER,
+            use_hist_vol=USE_HIST_VOL,
             boll_upper=indicators['boll_upper'],
             boll_lower=indicators['boll_lower'],
             boll_middle=indicators['boll_middle'],
@@ -238,11 +241,7 @@ class GridTraderApp:
 
             last_price = price
 
-            # 更新动态网格间距
-            current_spacing = self.market_mgr.get_grid_spacing(now)
-            if abs(current_spacing - self.engine.last_grid_spacing) > 0.0001:
-                self.engine.update_grid_spacing(current_spacing)
-                logger.info(f"[Loop] 网格间距更新: {current_spacing:.4f}")
+            # 网格间距在初始化时已固定，全天不再切换
 
             # 检查网格触发
             result = self.engine.check_and_trade(price, now)
@@ -299,7 +298,7 @@ class GridTraderApp:
                 f"持仓={status['current_position']}股 "
                 f"(成本={status['position_cost']:.4f}, 可卖={avail}) | "
                 f"T0={t0:.2f} | 持仓={position_pnl:.2f} | 合计={total:.2f} | "
-                f"间距={current_spacing:.4f} | 档位={status['current_level']}"
+                f"间距={status['current_spacing']:.4f} | 档位={status['current_level']}"
             )
 
             time.sleep(self.POLL_INTERVAL_SEC)

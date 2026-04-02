@@ -64,6 +64,16 @@ def calc_bollinger_bands(df: pd.DataFrame, period: int = 20, std_mult: float = 2
     return sma, upper_band, lower_band
 
 
+def calc_historical_volatility(df: pd.DataFrame, period: int = 20) -> float:
+    """
+    计算历史波动率（涨跌幅百分比的标准差）
+    """
+    returns = df['close'].pct_change().dropna()
+    volatility = returns.tail(period).std()
+    logger.info(f"[HistoricalVolatility] period={period}, vol={volatility:.6f} ({volatility*100:.2f}%)")
+    return float(volatility)
+
+
 def calc_atr_vectorized(df: pd.DataFrame, period: int = 14) -> float:
     """
     高效计算最新 ATR 值（纯向量版本，用于实时场景）
@@ -79,6 +89,43 @@ def calc_atr_vectorized(df: pd.DataFrame, period: int = 14) -> float:
     atr_series = tr.rolling(window=period, min_periods=period).mean()
 
     return float(atr_series.iloc[-1])
+
+
+def calc_historical_volatility(df: pd.DataFrame, period: int = 20) -> float:
+    """
+    计算历史波动率（Historical Volatility）
+    使用过去 N 天的对数收益率标准差
+    
+    Args:
+        df: 包含 close 列的 DataFrame（按日期升序）
+        period: 计算周期（默认20天）
+    
+    Returns:
+        历史波动率（float），例如 0.02 表示 2%
+    """
+    # 计算日对数收益率
+    returns = np.log(df['close'] / df['close'].shift(1))
+    
+    # 取最近 period 个收益率计算标准差
+    recent_returns = returns.dropna().iloc[-period:]
+    
+    # 年化波动率（假设252个交易日）
+    # 这里返回的是日波动率，供网格使用
+    hist_vol = recent_returns.std()
+    
+    logger.info(f"[HistVol] 计算完成，周期={period}，最新历史波动率={hist_vol:.6f} ({hist_vol*100:.2f}%)")
+    return float(hist_vol)
+
+
+def calc_historical_volatility_vectorized(df: pd.DataFrame, period: int = 20) -> float:
+    """
+    高效计算最新历史波动率（纯向量版本，用于实时场景）
+    返回最新的历史波动率
+    """
+    returns = np.log(df['close'] / df['close'].shift(1))
+    hist_vol_series = returns.rolling(window=period, min_periods=period).std()
+    
+    return float(hist_vol_series.iloc[-1])
 
 
 def verify_atr_calculation():
