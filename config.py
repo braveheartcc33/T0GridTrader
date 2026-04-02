@@ -50,7 +50,6 @@ BASE_PRICE = None         # 运行时设置
 # 每格基础间距 = 历史波动率 × 基准价 / GRID_COUNT
 # 不再使用 ATR（无法处理除权）和分时段切换
 HIST_VOL_PERIOD = 20  # 历史波动率计算周期（天数）
-HIST_VOL_MULTIPLIER = 3.0        # 波动率倍数（可调整）
 USE_HIST_VOL = True              # 开关：True=历史波动率，False=ATR
 
 # ==================== 向后兼容的别名（已废弃） ====================

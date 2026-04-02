@@ -39,7 +39,7 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-from config import STOCK_CODE, STOCK_NAME, STOCKS, MULTI_STOCK_MODE, USE_HIST_VOL, HIST_VOL_MULTIPLIER
+from config import STOCK_CODE, STOCK_NAME, STOCKS, MULTI_STOCK_MODE, USE_HIST_VOL
 
 
 class GridTraderApp:
@@ -170,7 +170,7 @@ class GridTraderApp:
             atr14=indicators['atr14'],
             atr_spacing=STOCKS[0].get('atr_spacing', 4.0),
             hist_vol=indicators.get('hist_vol'),
-            hist_vol_mult=HIST_VOL_MULTIPLIER,
+            
             use_hist_vol=USE_HIST_VOL,
             boll_upper=indicators['boll_upper'],
             boll_lower=indicators['boll_lower'],

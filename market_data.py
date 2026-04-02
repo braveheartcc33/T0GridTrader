@@ -19,7 +19,7 @@ import tushare as ts
 from config import (
     TUSHARE_TOKEN, TENGXUN_REALTIME_URL,
     STOCK_CODE, BOLL_PERIOD, ATR_PERIOD,
-    GRID_COUNT, HIST_VOL_PERIOD, HIST_VOL_MULTIPLIER,
+    GRID_COUNT, HIST_VOL_PERIOD,
     TRADING_MORNING_START, TRADING_MORNING_END,
     TRADING_AFTERNOON_START, TRADING_AFTERNOON_END,
 )
@@ -194,12 +194,12 @@ def build_indicators(df: pd.DataFrame) -> dict:
 
     atr_series = calc_atr(df, period=ATR_PERIOD)
     sma, upper, lower = calc_bollinger_bands(df, period=BOLL_PERIOD)
-    hist_vol = calc_historical_volatility(df, period=HISTORICAL_VOLATILITY_PERIOD)
+    hist_vol = calc_historical_volatility(df, period=HIST_VOL_PERIOD)
 
     # tushare K线数据按日期升序排列：iloc[0]=最老日期，iloc[-1]=最新日期
     result = {
         'atr14': float(atr_series.iloc[-1]),
-        'hist_volatility': hist_vol,
+        'hist_vol': hist_vol,
         'boll_upper': float(upper.iloc[-1]),
         'boll_middle': float(sma.iloc[-1]),
         'boll_lower': float(lower.iloc[-1]),
@@ -300,13 +300,13 @@ class MarketDataManager:
         
         全天固定间距，不再根据时段切换
         """
-        from config import USE_HIST_VOL, HIST_VOL_MULTIPLIER
+        from config import USE_HIST_VOL
         
         if USE_HIST_VOL:
             hist_vol = self.indicators.get('hist_vol', 0)
             last_close = self.indicators['last_close']
-            spacing = last_close * hist_vol * HIST_VOL_MULTIPLIER
-            return spacing, HIST_VOL_MULTIPLIER
+            spacing = last_close * hist_vol
+            return spacing, 1.0
         else:
             base_spacing = self.indicators['atr14'] / GRID_COUNT
             return base_spacing * BASE_MULTIPLIER, BASE_MULTIPLIER
@@ -315,7 +315,7 @@ class MarketDataManager:
         """
         计算网格间距（全天固定，不再盘中切换）
         
-        如果 USE_HIST_VOL = True：使用历史波动率 × HIST_VOL_MULTIPLIER
+        如果 USE_HIST_VOL = True：使用历史波动率（直接作为间距）
         否则：使用 ATR / GRID_COUNT × BASE_MULTIPLIER（传统方式，但不再时段切换）
 
         Args:
@@ -324,7 +324,7 @@ class MarketDataManager:
         Returns:
             每格价格间距
         """
-        from config import GRID_COUNT, USE_HIST_VOL, HIST_VOL_MULTIPLIER, BASE_MULTIPLIER
+        from config import GRID_COUNT, USE_HIST_VOL, BASE_MULTIPLIER
 
         if USE_HIST_VOL:
             # 使用历史波动率：历史波动率 × 倍数 = 每格间距
@@ -335,8 +335,8 @@ class MarketDataManager:
                 return base_spacing * BASE_MULTIPLIER
             # 历史波动率是百分比形式，直接乘以价格得到价格波动
             last_close = self.indicators['last_close']
-            spacing = last_close * hist_vol * HIST_VOL_MULTIPLIER
-            logger.info(f"[MarketDataManager] 网格间距(历史波动率): {spacing:.4f} = 价格{last_close} × 波幅{hist_vol:.4f} × {HIST_VOL_MULTIPLIER}")
+            spacing = last_close * hist_vol
+            logger.info(f"[MarketDataManager] 网格间距(历史波动率): {spacing:.4f} = 价格{last_close} × 波幅{hist_vol:.4f} ")
             return spacing
         else:
             # 使用 ATR（传统方式，不切换）
