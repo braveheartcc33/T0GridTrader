@@ -168,8 +168,7 @@ class GridTraderApp:
         self.engine = self.GridEngineCls(
             base_price=base_price,
             atr14=indicators['atr14'],
-            atr_spacing=STOCKS[0].get('atr_spacing', 4.0),
-            hist_vol=indicators.get('hist_vol'),
+            hist_volatility=indicators.get('hist_volatility'),  # 统一使用 hist_volatility
             hist_vol_mult=0.5,  # 每格=0.5σ，即档位在±0.5σ/±1σ/±1.5σ...
             
             use_hist_vol=USE_HIST_VOL,
@@ -180,8 +179,8 @@ class GridTraderApp:
             yesterday_close_position=indicators.get('last_close_position', INITIAL_BASE_SHARES),
         )
 
-        # 发送初始化报告
-        spacing = indicators['atr14'] * self.engine.atr_spacing
+        # 发送初始化报告（使用实际计算的间距）
+        spacing = self.engine.base_spacing
         self.notifier.send_init_report(indicators, base_price,
                                         self.engine.grid_count, spacing)
 

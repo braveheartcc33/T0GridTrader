@@ -1,11 +1,18 @@
 """
-grid_engine.py - 核心网格交易引擎（v3 - 破网停机版）
+grid_engine.py - 核心网格交易引擎
 
-核心逻辑：
+核心逻辑（破网停机版）：
 - 网格边界：档位 -5 到 +5（共11档）
 - 盘中价格超出上下限 → 停止交易，等待尾盘
 - 14:30 尾盘统一将持仓恢复到昨日收盘数量
 - T+0 规则：每日卖出额度 = 底仓数量（10000股）
+
+关键变更（2026-04-02）：
+- 统一历史波动率体系：间距 = 价格 × σ × 0.5
+- 档位定义：level±1 = ±0.5σ, ±2 = ±1.0σ, ±3 = ±1.5σ...
+- 全天固定间距，无时段切换
+
+作者: 西蒙斯之虎 🐯
 """
 import logging
 from datetime import datetime
@@ -17,10 +24,13 @@ from config import (
     GRID_COUNT, SHARES_PER_GRID, INITIAL_BASE_SHARES, STOP_LOSS_PCT,
     TRADING_MORNING_START, TRADING_MORNING_END,
     TRADING_AFTERNOON_START, TRADING_AFTERNOON_END,
+    USE_HIST_VOL,
 )
 
 logger = logging.getLogger(__name__)
 
+
+# ==================== 数据类 ====================
 
 @dataclass
 class TradeRecord:
@@ -36,12 +46,17 @@ class TradeRecord:
     pre_trade_cost: float = 0.0  # 执行前的 position_cost（用于精确计算已实现盈亏）
 
 
+# ==================== 网格引擎类 ====================
+
 class GridEngine:
     """
     网格交易引擎（破网停机版）
-    - 网格边界熔断：价格超出上下限（+-5档）时停止交易
-    - 14:30 尾盘统一平仓回到昨日收盘数量
-    - T+0 规则：每日净卖出上限 = 底仓数量
+    
+    关键设计：
+    - 全天固定网格间距，无时段切换
+    - 历史波动率 = 20日涨跌幅标准差
+    - 间距 = 价格 × σ × 0.5
+    - 档位定义：level±1 = ±0.5σ, ±2 = ±1.0σ, ±3 = ±1.5σ...
     """
 
     def __init__(self,
@@ -50,10 +65,9 @@ class GridEngine:
                  shares_per_grid: int = SHARES_PER_GRID,
                  initial_base_shares: int = INITIAL_BASE_SHARES,
                  atr14: float = None,
-                 atr_spacing: float = 4.0,          # ATR倍数，每格间距 = ATR × atr_spacing
-                 hist_vol: float = None,             # 历史波动率
-                 hist_vol_mult: float = 0.5,         # 【档位密度系数】每格 = hist_vol × mult；0.5=0.5σ/格
-                 use_hist_vol: bool = False,          # 是否使用历史波动率
+                 hist_volatility: float = None,       # 历史波动率（统一 key 名）
+                 hist_vol_mult: float = 0.5,           # 每格 = 0.5σ
+                 use_hist_vol: bool = USE_HIST_VOL,    # 是否使用历史波动率
                  boll_upper: float = None,
                  boll_lower: float = None,
                  boll_middle: float = None,
@@ -63,8 +77,7 @@ class GridEngine:
         self.shares_per_grid = shares_per_grid
         self.initial_base_shares = initial_base_shares
         self.atr14 = atr14
-        self.atr_spacing = atr_spacing
-        self.hist_vol = hist_vol
+        self.hist_volatility = hist_volatility  # 统一使用这个属性名
         self.hist_vol_mult = hist_vol_mult
         self.use_hist_vol = use_hist_vol
         self.boll_upper = boll_upper
@@ -74,14 +87,18 @@ class GridEngine:
         # 昨日收盘持仓（强制平仓目标），默认为初始底仓
         self.yesterday_position = yesterday_close_position or initial_base_shares
 
-        # 网格间距计算
-        if use_hist_vol and hist_vol and hist_vol > 0:
-            # 历史波动率方式：价格 × 历史波动率 × 档位密度系数
-            # 档位定义：level±1 = ±0.5σ, level±2 = ±1.0σ, level±3 = ±1.5σ ...
-            self.base_spacing = base_price * hist_vol * hist_vol_mult
+        # 网格间距计算（固定不变）
+        # 公式：间距 = 价格 × σ × 0.5
+        if use_hist_vol and hist_volatility and hist_volatility > 0:
+            self.base_spacing = base_price * hist_volatility * hist_vol_mult
+            self.spacing_method = "历史波动率"
         else:
-            # ATR方式：ATR × 倍数
+            # 回退到 ATR 方式（已废弃）
+            logger.warning("[GridEngine] 历史波动率不可用，回退到 ATR 方式（已废弃）")
+            atr_spacing = 4.0  # 默认 ATR 倍数
             self.base_spacing = atr14 * atr_spacing if atr14 else base_price * 0.01
+            self.spacing_method = "ATR"
+        
         self.last_grid_spacing = self.base_spacing
 
         # 网格边界
@@ -118,27 +135,60 @@ class GridEngine:
         # 上次成交价格（用于控制最小价格变动门槛）
         self.last_trade_price: float = base_price
 
-        logger.info(f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
-                    f"昨日持仓={self.yesterday_position}, 每格间距={self.base_spacing:.4f}({'历史波动率×'+str(round(self.hist_vol_mult,1)) if (hasattr(self,'use_hist_vol') and self.use_hist_vol and self.hist_vol) else 'ATR×'+str(self.atr_spacing)}), "
-                    f"网格边界={self.MIN_LEVEL}~{self.MAX_LEVEL}")
+        # 计算方法说明
+        if use_hist_vol and hist_volatility:
+            logger.info(
+                f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
+                f"昨日持仓={self.yesterday_position}, "
+                f"间距={self.base_spacing:.4f} = 价格{base_price} × σ{hist_volatility:.4f} × {hist_vol_mult}, "
+                f"方法={self.spacing_method}, "
+                f"网格边界={self.MIN_LEVEL}~{self.MAX_LEVEL}"
+            )
+            logger.info(f"[GridEngine] 档位定义: level±1=±0.5σ, ±2=±1.0σ, ±3=±1.5σ...")
+        else:
+            logger.info(
+                f"[GridEngine] 初始化: 基准价={base_price}, 底仓={initial_base_shares}, "
+                f"昨日持仓={self.yesterday_position}, "
+                f"间距={self.base_spacing:.4f}({self.spacing_method}), "
+                f"网格边界={self.MIN_LEVEL}~{self.MAX_LEVEL}"
+            )
 
     def _build_grid(self) -> List[dict]:
+        """构建网格档位"""
         half = self.grid_count // 2
         levels = []
         for i in range(-half, half + 1):
-            levels.append({'level': i, 'price': self.base_price + i * self.base_spacing})
+            # 档位价格 = 基准价 + 档位 × 间距
+            # level=0 → 基准价
+            # level=+1 → 基准价 + 0.5σ
+            # level=+2 → 基准价 + 1.0σ
+            levels.append({
+                'level': i, 
+                'price': self.base_price + i * self.base_spacing
+            })
         levels.sort(key=lambda x: x['price'])
-        logger.info(f"[GridEngine] 网格 {len(levels)} 档: {levels[0]['price']:.4f}~{levels[-1]['price']:.4f}")
+        
+        # 打印网格详情
+        grid_prices = [f"L{i['level']}:{i['price']:.4f}" for i in levels]
+        logger.info(f"[GridEngine] 网格 {len(levels)} 档: {grid_prices}")
+        
         return levels
 
     def update_grid_spacing(self, new_spacing: float):
-        """更新网格间距"""
-        self.last_grid_spacing = new_spacing
+        """
+        更新网格间距（保留接口，但不再实际调用）
+        全天固定间距，不允许修改
+        """
+        logger.warning(f"[GridEngine] 全天固定间距，不允许修改: {new_spacing}")
+        # 不执行实际修改
 
     def update_price(self, current_price: float):
         self.last_price = current_price
 
+    # ==================== 时间判断 ====================
+
     def _is_trading_time(self, dt: datetime = None) -> bool:
+        """判断是否在交易时段"""
         if dt is None:
             dt = datetime.now()
         cur_min = dt.hour * 60 + dt.minute
@@ -149,16 +199,45 @@ class GridEngine:
         return (mor_s <= cur_min <= mor_e) or (aft_s <= cur_min <= aft_e)
 
     def _is_closing_window(self, dt: datetime = None) -> bool:
+        """尾盘30分钟（14:30起）"""
         if dt is None:
             dt = datetime.now()
         cur_min = dt.hour * 60 + dt.minute
         aft_e = TRADING_AFTERNOON_END[0] * 60 + TRADING_AFTERNOON_END[1]
         return cur_min >= (aft_e - 30)
 
+    # ==================== 档位计算 ====================
+
     def _price_to_level(self, price: float) -> int:
+        """
+        将价格转换为档位
+        
+        Args:
+            price: 当前价格
+        
+        Returns:
+            档位（向上取整）
+            level=0 → 基准价
+            level=+1 → 基准价 + 0.5σ
+            level=+2 → 基准价 + 1.0σ
+        """
         if self.last_grid_spacing == 0:
             return 0
         return int(round((price - self.base_price) / self.last_grid_spacing))
+
+    def _level_to_price(self, level: int) -> float:
+        """
+        将档位转换为价格
+        
+        Args:
+            level: 档位
+        
+        Returns:
+            价格
+        """
+        return self.base_price + level * self.last_grid_spacing
+
+    # ==================== 交易记录 ====================
 
     def _record_trade(self, action, price, shares, grid_level, reason, current_time):
         """记录一笔交易"""
@@ -187,9 +266,19 @@ class GridEngine:
         self.trade_records.append(record)
         return record
 
+    # ==================== 核心交易逻辑 ====================
+
     def check_and_trade(self, current_price: float, current_time: datetime = None) -> tuple:
         """
         检查是否触发网格交易信号
+        
+        核心规则：
+        1. 最小价格变动门槛：两次交易之间价格变动必须 >= 一个网格间距
+        2. 尾盘30分钟强制平仓
+        3. 非交易时段不交易
+        4. 网格边界熔断：超出上下限暂停交易
+        5. T+0 规则：累计买<=底仓，累计卖<=底仓
+        
         Returns: (TradeRecord or None, avg_cost)
         """
         if current_time is None:
@@ -229,11 +318,11 @@ class GridEngine:
                 return record, avg_cost
             return None, avg_cost
 
-        # 3. 非交易时段不交易
+        # 2. 非交易时段不交易
         if not self._is_trading_time(current_time):
             return None, avg_cost
 
-        # 4. 网格边界熔断：超出上下限就停止，等待尾盘
+        # 3. 网格边界熔断：超出上下限就停止，等待尾盘
         if current_level > self.MAX_LEVEL:
             logger.info(f"[GridEngine] ⚠️ 价格超出网格上限(档位{current_level}>{self.MAX_LEVEL})，暂停交易，等待尾盘")
             return None, avg_cost
@@ -242,11 +331,10 @@ class GridEngine:
             logger.info(f"[GridEngine] ⚠️ 价格超出网格下限(档位{current_level}<{self.MIN_LEVEL})，暂停交易，等待尾盘")
             return None, avg_cost
 
-        # 5. 正常网格交易
+        # 4. 正常网格交易
         # 规则1：累计买<=底仓，累计卖<=底仓
         # 规则2：每档有固定目标持仓 = 底仓 - 档位×每格股数
         # 规则3：可交易量不够时，能买/卖多少是多少
-        # 附加约束：两次交易之间价格变动必须 >= 一个网格间距
         target_position = self.base_position - current_level * self.shares_per_grid
         trade_shares = abs(self.current_position - target_position)
 
@@ -319,11 +407,15 @@ class GridEngine:
                 break
         return records
 
+    # ==================== 状态查询 ====================
+
     def get_status(self) -> dict:
+        """获取当前引擎状态"""
         # available_sell = 底仓 - 今日累计净卖出（买的不算！）
-        # 卖了多少 = cumulative_sells
-        # available_sell 永远不超过 base_position
         available_sell = max(0, self.base_position - self.cumulative_sells)
+        
+        current_level = self._price_to_level(self.last_price)
+        
         return {
             'base_price': self.base_price,
             'current_price': self.last_price,
@@ -338,21 +430,23 @@ class GridEngine:
             'realized_pnl': self.realized_pnl,
             'total_pnl': self.total_pnl,
             'atr14': self.atr14,
-            'hist_vol': self.hist_vol,
+            'hist_volatility': self.hist_volatility,  # 统一 key 名
             'use_hist_vol': self.use_hist_vol,
+            'spacing_method': self.spacing_method,
             'boll_upper': self.boll_upper,
             'boll_middle': self.boll_middle,
             'boll_lower': self.boll_lower,
             'grid_count': self.grid_count,
             'base_spacing': self.base_spacing,
             'current_spacing': self.last_grid_spacing,
-            'current_level': self._price_to_level(self.last_price),
+            'current_level': current_level,
             'max_level': self.MAX_LEVEL,
             'min_level': self.MIN_LEVEL,
             'stop_loss_triggered': self.stop_loss_triggered,
         }
 
     def get_trade_records(self) -> List[dict]:
+        """获取交易记录"""
         return [
             {
                 'timestamp': r.timestamp,

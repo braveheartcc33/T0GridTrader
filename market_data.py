@@ -1,7 +1,16 @@
 """
 market_data.py - 市场数据获取
-- tushare 历史K线
+
+功能：
+- tushare 历史K线获取
 - 腾讯接口实时行情
+- 技术指标计算（统一使用 indicators.py）
+
+关键变更（2026-04-02）：
+- 统一历史波动率 key 为 'hist_volatility'
+- 全天固定间距，无时段切换
+
+作者: 西蒙斯之虎 🐯
 """
 import time
 import logging
@@ -22,17 +31,30 @@ from config import (
     GRID_COUNT, HIST_VOL_PERIOD,
     TRADING_MORNING_START, TRADING_MORNING_END,
     TRADING_AFTERNOON_START, TRADING_AFTERNOON_END,
+    USE_HIST_VOL,
 )
-from indicators import calc_atr, calc_bollinger_bands, calc_historical_volatility, calc_historical_volatility
+from indicators import (
+    calc_atr, 
+    calc_bollinger_bands, 
+    calc_historical_volatility,
+    calc_all_indicators,
+    get_grid_spacing,
+    HIST_VOL_PERIOD,
+    HIST_VOL_MULT,
+)
 
 logger = logging.getLogger(__name__)
 
+
+# ==================== Tushare 客户端 ====================
 
 def get_tushare_client():
     """获取 tushare pro 接口"""
     pro = ts.pro_api(TUSHARE_TOKEN)
     return pro
 
+
+# ==================== 历史数据获取 ====================
 
 def fetch_daily_history(ts_code: str = STOCK_CODE,
                         start_date: str = "20251201",
@@ -65,6 +87,8 @@ def fetch_daily_history(ts_code: str = STOCK_CODE,
     logger.info(f"[MarketData] 获取历史K线 {ts_code} 从 {start_date} 到 {end_date}，共 {len(df)} 条")
     return df
 
+
+# ==================== 实时行情获取 ====================
 
 def fetch_realtime_price(qq_code: str = "sz000825", max_retries: int = 3, retry_wait: float = 3.0) -> Optional[float]:
     """
@@ -174,13 +198,18 @@ def get_qq_code(ts_code: str = STOCK_CODE) -> str:
         return f"sz{symbol}"
 
 
+# ==================== 指标构建 ====================
+
 def build_indicators(df: pd.DataFrame) -> dict:
     """
-    从历史数据构建技术指标
+    从历史数据构建技术指标（统一入口）
+    
+    注意：统一使用 'hist_volatility' 作为 key 名
 
     Returns:
         dict: {
             'atr14': float,
+            'hist_volatility': float,  # 统一 key 名
             'boll_upper': float,
             'boll_middle': float,
             'boll_lower': float,
@@ -189,26 +218,7 @@ def build_indicators(df: pd.DataFrame) -> dict:
             'prev_close': float,
         }
     """
-    if len(df) < BOLL_PERIOD:
-        raise ValueError(f"历史数据不足，需要至少 {BOLL_PERIOD} 条，当前 {len(df)} 条")
-
-    atr_series = calc_atr(df, period=ATR_PERIOD)
-    sma, upper, lower = calc_bollinger_bands(df, period=BOLL_PERIOD)
-    hist_vol = calc_historical_volatility(df, period=HIST_VOL_PERIOD)
-
-    # tushare K线数据按日期升序排列：iloc[0]=最老日期，iloc[-1]=最新日期
-    result = {
-        'atr14': float(atr_series.iloc[-1]),
-        'hist_vol': hist_vol,
-        'boll_upper': float(upper.iloc[-1]),
-        'boll_middle': float(sma.iloc[-1]),
-        'boll_lower': float(lower.iloc[-1]),
-        'last_close': float(df['close'].iloc[-1]),    # 最新K线收盘
-        'open_price': float(df['open'].iloc[-1]),     # 最新K线开盘
-        'prev_close': float(df['close'].iloc[-2]) if len(df) >= 2 else None,  # 次新K线收盘
-        'trade_date': str(df['trade_date'].iloc[-1]),
-    }
-    return result
+    return calc_all_indicators(df)
 
 
 def get_today_open_price(ts_code: str = STOCK_CODE,
@@ -226,10 +236,17 @@ def get_today_open_price(ts_code: str = STOCK_CODE,
     return None
 
 
+# ==================== MarketDataManager 类 ====================
+
 class MarketDataManager:
     """
     市场数据管理器
     封装历史数据（tushare）和实时数据（腾讯接口）
+    
+    关键设计：
+    - 全天固定网格间距，无时段切换
+    - 历史波动率 = 20日涨跌幅标准差
+    - 间距 = 价格 × σ × 0.5
     """
 
     def __init__(self, ts_code: str = STOCK_CODE):
@@ -238,12 +255,15 @@ class MarketDataManager:
         self.history_df: Optional[pd.DataFrame] = None
         self.indicators: Optional[dict] = None
         self._today_open: Optional[float] = None
+        
+        # 预计算的网格间距（固定不变）
+        self._grid_spacing: Optional[float] = None
 
     def initialize(self):
         """初始化：从 tushare 加载历史数据并计算指标"""
         logger.info("[MarketDataManager] 开始初始化...")
 
-        # 获取最近100个交易日历史数据（足够计算20日布林带和14日ATR）
+        # 获取最近180个交易日历史数据（足够计算20日布林带和20日波动率）
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=180)).strftime("%Y%m%d")
 
@@ -253,17 +273,19 @@ class MarketDataManager:
             end_date=end_date
         )
 
-        if len(self.history_df) < BOLL_PERIOD:
-            raise ValueError(f"历史数据不足 {BOLL_PERIOD} 条，仅获取到 {len(self.history_df)} 条")
+        if len(self.history_df) < max(BOLL_PERIOD, HIST_VOL_PERIOD):
+            raise ValueError(f"历史数据不足 {max(BOLL_PERIOD, HIST_VOL_PERIOD)} 条，仅获取到 {len(self.history_df)} 条")
 
+        # 使用统一的指标计算函数
         self.indicators = build_indicators(self.history_df)
 
+        # 预计算网格间距（固定不变，全天使用）
+        self._grid_spacing = self._calculate_grid_spacing()
+        logger.info(f"[MarketDataManager] 固定网格间距: {self._grid_spacing:.4f}")
+
         # 尝试从腾讯实时行情获取真实的今日开盘价
-        # tushare 日线在交易时段不含今日数据，所以以昨日 K 线最后一根的 open 当"今日开盘"是错的
         realtime_open = fetch_realtime_price(self.qq_code)
         if realtime_open is not None:
-            # 用腾讯实时行情的今开（字段4），但需要从腾讯数据中解析
-            # fetch_realtime_price 只返回当前价，所以我们直接解析腾讯原始数据
             import requests as _req
             try:
                 _resp = _req.get(f"{TENGXUN_REALTIME_URL}{self.qq_code}", timeout=5)
@@ -281,10 +303,38 @@ class MarketDataManager:
             self._today_open = self.indicators['open_price']
 
         logger.info(f"[MarketDataManager] 初始化完成: ATR={self.indicators['atr14']:.4f}, "
+                    f"历史波动率={self.indicators['hist_volatility']:.4f} ({self.indicators['hist_volatility']*100:.2f}%), "
                     f"布林={self.indicators['boll_lower']:.4f}~{self.indicators['boll_upper']:.4f}, "
+                    f"固定间距={self._grid_spacing:.4f}, "
                     f"今日开盘={self._today_open}")
 
         return self.indicators
+
+    def _calculate_grid_spacing(self) -> float:
+        """
+        计算网格间距（全天固定）
+        
+        公式：间距 = 价格 × σ × 0.5
+        - σ = 20日涨跌幅标准差（hist_volatility）
+        - 0.5 = 每格对应 0.5σ
+        """
+        if not USE_HIST_VOL:
+            # 回退到 ATR 方式（已废弃，仅兼容）
+            logger.warning("[MarketDataManager] USE_HIST_VOL=False，回退到ATR方式（已废弃）")
+            base_spacing = self.indicators['atr14'] / GRID_COUNT
+            return base_spacing
+        
+        hist_vol = self.indicators.get('hist_volatility', 0)
+        if hist_vol is None or hist_vol == 0:
+            logger.warning("[MarketDataManager] 历史波动率为0，回退到ATR")
+            base_spacing = self.indicators['atr14'] / GRID_COUNT
+            return base_spacing
+        
+        last_close = self.indicators['last_close']
+        spacing = get_grid_spacing(last_close, hist_vol, HIST_VOL_MULT)
+        
+        logger.info(f"[MarketDataManager] 网格间距计算: {spacing:.4f} = 价格{last_close} × σ{hist_vol:.4f} × {HIST_VOL_MULT}")
+        return spacing
 
     def get_realtime_price(self) -> Optional[float]:
         """获取实时价格（腾讯接口）"""
@@ -294,54 +344,23 @@ class MarketDataManager:
         """获取当前指标数据"""
         return self.indicators or {}
 
-    def get_grid_spacing_with_multiplier(self, current_time: datetime = None) -> tuple:
-        """
-        返回 (spacing, multiplier)
-        
-        全天固定间距，不再根据时段切换
-        """
-        from config import USE_HIST_VOL
-        
-        if USE_HIST_VOL:
-            hist_vol = self.indicators.get('hist_vol', 0)
-            last_close = self.indicators['last_close']
-            spacing = last_close * hist_vol
-            return spacing, 1.0
-        else:
-            base_spacing = self.indicators['atr14'] / GRID_COUNT
-            return base_spacing * BASE_MULTIPLIER, BASE_MULTIPLIER
-
     def get_grid_spacing(self, current_time: datetime = None) -> float:
         """
-        计算网格间距（全天固定，不再盘中切换）
+        获取网格间距（全天固定，无需参数）
         
-        如果 USE_HIST_VOL = True：使用历史波动率（直接作为间距）
-        否则：使用 ATR / GRID_COUNT × BASE_MULTIPLIER（传统方式，但不再时段切换）
-
+        注意：此方法保留用于兼容性，不再根据时段切换
+        
         Args:
-            current_time: datetime（默认 now），仅用于兼容性
-
+            current_time: 保留参数，仅用于兼容性（已废弃）
+        
         Returns:
             每格价格间距
         """
-        from config import GRID_COUNT, USE_HIST_VOL, BASE_MULTIPLIER
+        return self._grid_spacing if self._grid_spacing else 0.0
 
-        if USE_HIST_VOL:
-            # 使用历史波动率：历史波动率 × 倍数 = 每格间距
-            hist_vol = self.indicators.get('hist_vol', 0)
-            if hist_vol is None or hist_vol == 0:
-                logger.warning("[MarketDataManager] 历史波动率为0，回退到ATR")
-                base_spacing = self.indicators['atr14'] / GRID_COUNT
-                return base_spacing * BASE_MULTIPLIER
-            # 历史波动率是百分比形式，直接乘以价格得到价格波动
-            last_close = self.indicators['last_close']
-            spacing = last_close * hist_vol
-            logger.info(f"[MarketDataManager] 网格间距(历史波动率): {spacing:.4f} = 价格{last_close} × 波幅{hist_vol:.4f} ")
-            return spacing
-        else:
-            # 使用 ATR（传统方式，不切换）
-            base_spacing = self.indicators['atr14'] / GRID_COUNT
-            return base_spacing * BASE_MULTIPLIER
+    def get_hist_volatility(self) -> float:
+        """获取历史波动率"""
+        return self.indicators.get('hist_volatility', 0) if self.indicators else 0
 
     def _is_trading_time(self, dt: datetime = None) -> bool:
         """判断是否在交易时段"""
@@ -366,5 +385,6 @@ class MarketDataManager:
             'indicators': self.indicators,
             'today_open': self._today_open,
             'is_trading': self._is_trading_time(),
-            'grid_spacing': self.get_grid_spacing() if self.indicators else None,
+            'grid_spacing': self._grid_spacing,
+            'hist_volatility': self.get_hist_volatility(),
         }
